@@ -1,0 +1,81 @@
+steps:
+  # Build all images in parallel
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-worker'
+    args: [
+      'buildx', 'build',
+      '--cache-from', 'type=registry,ref=us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-worker:cache',
+      '--cache-to', 'type=registry,ref=us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-worker:cache,mode=max',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-worker:latest',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-worker:$SHORT_SHA',
+      '-f', 'Dockerfile.worker',
+      '--push',
+      '.'
+    ]
+    waitFor: ['-']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-api'
+    args: [
+      'buildx', 'build',
+      '--cache-from', 'type=registry,ref=us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-api:cache',
+      '--cache-to', 'type=registry,ref=us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-api:cache,mode=max',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-api:latest',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-api:$SHORT_SHA',
+      '-f', 'Dockerfile.api',
+      '--push',
+      '.'
+    ]
+    waitFor: ['-']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-reports'
+    args: [
+      'buildx', 'build',
+      '--cache-from', 'type=registry,ref=us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-reports:cache',
+      '--cache-to', 'type=registry,ref=us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-reports:cache,mode=max',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-reports:latest',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-reports:$SHORT_SHA',
+      '-f', 'Dockerfile.reports',
+      '--push',
+      '.'
+    ]
+    waitFor: ['-']
+
+  # Deploy services
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-api'
+    entrypoint: 'gcloud'
+    args: [
+      'run', 'deploy', 'scanner-api',
+      '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-api:$SHORT_SHA',
+      '--region', 'us-central1',
+      '--platform', 'managed'
+    ]
+    waitFor: ['build-api']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy-reports'
+    entrypoint: 'gcloud'
+    args: [
+      'run', 'deploy', 'scanner-reports',
+      '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-reports:$SHORT_SHA',
+      '--region', 'us-central1',
+      '--platform', 'managed'
+    ]
+    waitFor: ['build-reports']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'update-worker-job'
+    entrypoint: 'gcloud'
+    args: [
+      'run', 'jobs', 'update', 'scanner-job',
+      '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-worker:$SHORT_SHA',
+      '--region', 'us-central1'
+    ]
+    waitFor: ['build-worker']
+
+timeout: 1800s
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY

@@ -1,0 +1,38 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-frontend',
+      '-f', 'apps/apps/frontend/Dockerfile',
+      'apps/apps/frontend'
+    ]
+
+  # Push the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-frontend']
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args: [
+      'run',
+      'deploy',
+      'scanner-frontend',
+      '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/dealbrief/scanner-frontend',
+      '--region', 'us-central1',
+      '--platform', 'managed',
+      '--allow-unauthenticated',
+      '--service-account', 'scanner-worker-sa@$PROJECT_ID.iam.gserviceaccount.com',
+      '--set-env-vars', 'NEXT_PUBLIC_SCANNER_API_URL=https://scanner-api-242181373909.us-central1.run.app',
+      '--memory', '512Mi',
+      '--cpu', '1',
+      '--min-instances', '0',
+      '--max-instances', '10',
+      '--port', '8080'
+    ]
+
+timeout: '1200s'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

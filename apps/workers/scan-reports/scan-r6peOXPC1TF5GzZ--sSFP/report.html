@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Assessment Report - vulnerable-test-site.vercel.app</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #fff;
+            padding: 40px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            border-bottom: 3px solid #2563eb;
+            padding-bottom: 20px;
+        }
+        
+        .header h1 {
+            color: #1e40af;
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+        
+        .header .domain {
+            font-size: 1.5rem;
+            color: #6b7280;
+            font-weight: 500;
+        }
+        
+        .header .scan-date {
+            color: #9ca3af;
+            margin-top: 10px;
+        }
+        
+        .executive-summary {
+            background: #f8fafc;
+            border-left: 4px solid #2563eb;
+            padding: 30px;
+            margin: 40px 0;
+            border-radius: 8px;
+        }
+        
+        .executive-summary h2 {
+            color: #1e40af;
+            margin-bottom: 20px;
+            font-size: 1.8rem;
+        }
+        
+        .risk-overview {
+            display: flex;
+            justify-content: space-around;
+            margin: 30px 0;
+            flex-wrap: wrap;
+        }
+        
+        .risk-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            min-width: 140px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin: 10px;
+        }
+        
+        .risk-card.critical { border-top: 4px solid #dc2626; }
+        .risk-card.high { border-top: 4px solid #ea580c; }
+        .risk-card.medium { border-top: 4px solid #d97706; }
+        .risk-card.low { border-top: 4px solid #65a30d; }
+        .risk-card.info { border-top: 4px solid #0891b2; }
+        
+        .risk-number {
+            font-size: 2rem;
+            font-weight: bold;
+            display: block;
+        }
+        
+        .risk-card.critical .risk-number { color: #dc2626; }
+        .risk-card.high .risk-number { color: #ea580c; }
+        .risk-card.medium .risk-number { color: #d97706; }
+        .risk-card.low .risk-number { color: #65a30d; }
+        .risk-card.info .risk-number { color: #0891b2; }
+        
+        .findings-section {
+            margin: 40px 0;
+        }
+        
+        .findings-section h2 {
+            color: #1e40af;
+            font-size: 1.8rem;
+            margin-bottom: 30px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        
+        .finding {
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .finding-header {
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .severity-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .severity-critical {
+            background: #fef2f2;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+        }
+        
+        .severity-high {
+            background: #fff7ed;
+            color: #ea580c;
+            border: 1px solid #fed7aa;
+        }
+        
+        .severity-medium {
+            background: #fffbeb;
+            color: #d97706;
+            border: 1px solid #fde68a;
+        }
+        
+        .severity-low {
+            background: #f0fdf4;
+            color: #65a30d;
+            border: 1px solid #bbf7d0;
+        }
+        
+        .severity-info {
+            background: #f0f9ff;
+            color: #0891b2;
+            border: 1px solid #bae6fd;
+        }
+        
+        .finding-title {
+            flex: 1;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #374151;
+        }
+        
+        .finding-body {
+            padding: 0 20px 20px;
+            color: #6b7280;
+        }
+        
+        .finding-description {
+            margin-bottom: 15px;
+            line-height: 1.7;
+        }
+        
+        .finding-recommendation {
+            background: #f8fafc;
+            border-left: 4px solid #2563eb;
+            padding: 15px;
+            border-radius: 0 8px 8px 0;
+            margin-top: 15px;
+        }
+        
+        .recommendation-label {
+            font-weight: 600;
+            color: #1e40af;
+            margin-bottom: 8px;
+        }
+        
+        .scan-metadata {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 30px;
+            margin: 40px 0;
+        }
+        
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        
+        .metadata-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .metadata-label {
+            font-weight: 600;
+            color: #374151;
+        }
+        
+        .metadata-value {
+            color: #6b7280;
+        }
+        
+        .footer {
+            margin-top: 60px;
+            text-align: center;
+            color: #9ca3af;
+            font-size: 0.9rem;
+            border-top: 1px solid #e5e7eb;
+            padding-top: 20px;
+        }
+        
+        @media print {
+            body { padding: 20px; }
+            .finding { page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Security Assessment Report</h1>
+        <div class="domain">vulnerable-test-site.vercel.app</div>
+        <div class="scan-date">Scan completed on 8/19/2025</div>
+    </div>
+
+    <div class="executive-summary">
+        <h2>Executive Summary</h2>
+        <p>This report presents the results of a comprehensive security assessment performed on <strong>vulnerable-test-site.vercel.app</strong>. 
+        The scan was completed in 46 seconds and analyzed 15 security modules.</p>
+        
+        <div class="risk-overview">
+            <div class="risk-card critical">
+                <span class="risk-number">0</span>
+                <div>Critical</div>
+            </div>
+            <div class="risk-card high">
+                <span class="risk-number">0</span>
+                <div>High</div>
+            </div>
+            <div class="risk-card medium">
+                <span class="risk-number">0</span>
+                <div>Medium</div>
+            </div>
+            <div class="risk-card low">
+                <span class="risk-number">0</span>
+                <div>Low</div>
+            </div>
+            <div class="risk-card info">
+                <span class="risk-number">0</span>
+                <div>Info</div>
+            </div>
+        </div>
+        
+        <p><strong>Total Findings:</strong> 0 security issues identified</p>
+    </div>
+
+    <div class="findings-section">
+        <h2>Results</h2>
+        <div class="executive-summary">
+            <p>✅ <strong>No significant security issues were identified</strong> during this assessment. 
+            The scanned domain appears to follow security best practices.</p>
+            <p>This assessment covered 15 different security aspects including SSL/TLS configuration, 
+            exposed services, common vulnerabilities, and security headers.</p>
+        </div>
+    </div>
+
+    <div class="scan-metadata">
+        <h2>Scan Metadata</h2>
+        <div class="metadata-grid">
+            <div class="metadata-item">
+                <span class="metadata-label">Scan ID:</span>
+                <span class="metadata-value">scan-r6peOXPC1TF5GzZ--sSFP</span>
+            </div>
+            <div class="metadata-item">
+                <span class="metadata-label">Domain:</span>
+                <span class="metadata-value">vulnerable-test-site.vercel.app</span>
+            </div>
+            <div class="metadata-item">
+                <span class="metadata-label">Scan Duration:</span>
+                <span class="metadata-value">46 seconds</span>
+            </div>
+            <div class="metadata-item">
+                <span class="metadata-label">Modules Executed:</span>
+                <span class="metadata-value">15</span>
+            </div>
+            <div class="metadata-item">
+                <span class="metadata-label">Total Findings:</span>
+                <span class="metadata-value">0</span>
+            </div>
+            <div class="metadata-item">
+                <span class="metadata-label">Report Generated:</span>
+                <span class="metadata-value">8/19/2025</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>Report generated by DealBrief Scanner</p>
+        <p>This automated security assessment should be supplemented by manual testing for comprehensive coverage.</p>
+    </div>
+</body>
+</html>

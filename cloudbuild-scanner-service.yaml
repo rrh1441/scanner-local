@@ -1,0 +1,10 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/precise-victory-467219-s4/dealbrief/scanner-service:latest', '-f', 'Dockerfile.scanner-service', '.']
+
+images:
+  - 'us-central1-docker.pkg.dev/precise-victory-467219-s4/dealbrief/scanner-service:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'

@@ -1,0 +1,6 @@
+instance_number,correlation_factor,description,created_at
+1,1.00,First instance - full impact,2025-07-02 22:28:37.053937+00
+2,0.85,Second instance - reduced impact,2025-07-02 22:28:37.053937+00
+3,0.70,Third instance - further reduced,2025-07-02 22:28:37.053937+00
+4,0.50,"Fourth and subsequent instances - minimal additional 
+  impact",2025-07-02 22:28:37.053937+00
