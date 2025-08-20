@@ -105,7 +105,7 @@ async function runNmapScripts(host: string, port: string, type: string, scanId?:
             if (script['@_id'] === 'mysql-empty-password' && script['@_output'].includes("root account has empty password")) {
                 const artifactId = await insertArtifact({ type: 'db_auth_weakness', val_text: `MySQL root has empty password on ${host}:${port}`, severity: 'CRITICAL', meta: { scan_id: scanId, scan_module: 'dbPortScan', host, port, script: script['@_id'] } });
                 await insertFinding({
-                    scan_id: job.scanId,
+                    scan_id: scanId,
                     type: 'WEAK_CREDENTIALS',
                     severity: 'CRITICAL',
                     title: 'MySQL root has empty password',
@@ -125,7 +125,7 @@ async function runNmapScripts(host: string, port: string, type: string, scanId?:
                 if (hasDatabaseInfo) {
                     const artifactId = await insertArtifact({ type: 'db_misconfiguration', val_text: `MongoDB databases are listable without authentication on ${host}:${port}`, severity: 'HIGH', meta: { scan_id: scanId, scan_module: 'dbPortScan', host, port, script: script['@_id'], output: script['@_output'] } });
                     await insertFinding({
-                        scan_id: job.scanId,
+                        scan_id: scanId,
                         type: 'DATABASE_EXPOSURE',
                         severity: 'HIGH',
                         title: 'MongoDB databases listable without authentication',
@@ -142,7 +142,7 @@ async function runNmapScripts(host: string, port: string, type: string, scanId?:
             if (script['@_id'] === 'memcached-info' && script['@_output']?.includes('version')) {
                 const artifactId = await insertArtifact({ type: 'db_service', val_text: `Memcached service exposed on ${host}:${port}`, severity: 'MEDIUM', meta: { scan_id: scanId, scan_module: 'dbPortScan', host, port, script: script['@_id'], output: script['@_output'] } });
                 await insertFinding({
-                    scan_id: job.scanId,
+                    scan_id: scanId,
                     type: 'DATABASE_EXPOSURE',
                     severity: 'MEDIUM',
                     title: 'Memcached service exposed without authentication',
@@ -235,7 +235,7 @@ async function scanTarget(target: Target, totalTargets: number, scanId?: string,
             recommendation = `Secure ${serviceProduct} on ${cloudProvider} by reviewing security group/firewall rules and checking IAM policies.`;
         }
         await insertFinding({
-            scan_id: job.scanId,
+            scan_id: scanId,
             type: 'DATABASE_EXPOSURE',
             severity: 'HIGH',
             title: `${serviceProduct} service exposed to the internet`,
@@ -243,7 +243,7 @@ async function scanTarget(target: Target, totalTargets: number, scanId?: string,
             data: {
                 recommendation: recommendation,
                 host: host,
-                port: portNum,
+                port: port,
                 service: serviceProduct
             }
         });

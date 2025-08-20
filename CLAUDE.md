@@ -559,6 +559,127 @@ const { scan_id, status, duration_ms, report_url } = await response.json();
 
 ---
 
+## 🌐 Remote Access Configuration
+
+### Option 1: Cloudflare Tunnel (Recommended for Production)
+
+**Benefits**:
+- ✅ Free SSL certificates and DDoS protection
+- ✅ Stable subdomain (no URL changes)
+- ✅ Professional appearance
+- ✅ Works with existing domain setup
+
+**Setup**:
+```bash
+# Install Cloudflare tunnel
+brew install cloudflare/cloudflare/cloudflared
+
+# Login to Cloudflare (requires free account)
+cloudflared tunnel login
+
+# Create tunnel
+cloudflared tunnel create scanner
+
+# Configure DNS (adds subdomain only)
+# scanner.yourdomain.com → your Mac
+# yourdomain.com stays on Vercel
+
+# Run tunnel
+cloudflared tunnel run scanner
+```
+
+**Domain Configuration**:
+- Main site: `yourdomain.com` → Vercel (unchanged)
+- Scanner: `scanner.yourdomain.com` → Your Mac via tunnel
+- No hosting migration required!
+
+### Option 2: ngrok (Quick Setup for Development)
+
+**Benefits**:
+- ✅ Instant setup with free account
+- ✅ Great for testing and development
+- ✅ No DNS changes needed
+- ✅ Better reliability with authentication
+
+**Setup**:
+```bash
+# Install ngrok
+brew install ngrok
+
+# Configure auth token (sign up at ngrok.com for free)
+ngrok config add-authtoken YOUR_AUTH_TOKEN
+
+# Expose scanner (generates random URL with auth)
+ngrok http 8080
+# Output: https://abc123.ngrok-free.app → localhost:8080
+```
+
+**For Stable URLs** (paid plan $8/month):
+```bash
+# Custom subdomain with authentication
+ngrok http 8080 --subdomain=yourscanner
+# Output: https://yourscanner.ngrok-free.app
+```
+
+**Production Setup**:
+```bash
+# Start scanner with PM2
+pm2 start dist/localServer.js --name "scanner-local"
+
+# Start ngrok tunnel (in separate terminal)
+ngrok http 8080
+
+# Keep both running for continuous access
+pm2 save  # Save PM2 configuration
+```
+
+**Current Implementation**:
+- Scanner running on PM2: `http://localhost:8080`
+- Public ngrok URL: `https://200e3af44af3.ngrok-free.app`
+- Auth token stored securely in: `~/Library/Application Support/ngrok/ngrok.yml`
+
+### Option 3: SSH Tunnel (Most Secure)
+
+**Benefits**:
+- ✅ Most secure option
+- ✅ No third-party dependencies
+- ✅ Direct encrypted connection
+
+**Setup**:
+```bash
+# From your development machine
+ssh -L 8080:localhost:8080 user@your-mac-ip
+
+# Then access via localhost:8080
+```
+
+**Note**: Only works if you can establish SSH connection to your Mac.
+
+### Website Integration
+
+Once you have a public URL, update your Vercel function:
+
+```javascript
+// api/scan.js
+export default async function handler(req, res) {
+  const response = await fetch('YOUR_TUNNEL_URL/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      domain: req.body.domain,
+      scan_id: `web-${Date.now()}`
+    })
+  });
+  
+  const result = await response.json();
+  res.json(result);
+}
+```
+
+**Recommendation**: Start with ngrok for testing, migrate to Cloudflare tunnel for production.
+
+---
+
 ## 🏁 Summary
 
 **The local PostgreSQL scanner is now fully operational and ready for production use!**
@@ -573,3 +694,674 @@ Key achievements:
 The scanner has successfully escaped "GCP hell" and now runs as a simple, reliable, local service with enterprise-grade PostgreSQL storage and full security scanning capabilities.
 
 _Ready for production deployment and website integration!_
+
+---
+
+## 🚨 Alerting & Health Monitoring
+
+*Priority: Medium - Low likelihood but critical when needed*
+
+### API Health Monitoring
+
+#### **Health Check Endpoint Enhancement**
+```typescript
+// Enhanced /health endpoint in localServer.ts
+app.get('/health', async (req, res) => {
+  const health = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    version: '1.0.0-local',
+    services: {
+      database: await checkPostgreSQL(),
+      filesystem: await checkFileSystem(),
+      security_tools: await checkSecurityTools(),
+      network: await checkNetworkConnectivity()
+    },
+    performance: {
+      memory_usage: process.memoryUsage(),
+      cpu_usage: process.cpuUsage(),
+      active_scans: await getActiveScanCount()
+    }
+  };
+  
+  const overallHealthy = Object.values(health.services).every(s => s.status === 'ok');
+  res.status(overallHealthy ? 200 : 503).json(health);
+});
+
+async function checkPostgreSQL() {
+  try {
+    await store.pool.query('SELECT 1');
+    return { status: 'ok', latency_ms: Date.now() - start };
+  } catch (error) {
+    return { status: 'error', message: error.message };
+  }
+}
+
+async function checkSecurityTools() {
+  const tools = ['httpx', 'nuclei', 'sslscan', 'nmap'];
+  const results = {};
+  
+  for (const tool of tools) {
+    try {
+      await exec(tool, ['--version'], { timeout: 5000 });
+      results[tool] = { status: 'ok' };
+    } catch (error) {
+      results[tool] = { status: 'error', message: 'Tool not found or failed' };
+    }
+  }
+  
+  return results;
+}
+```
+
+### Internet Connectivity Monitoring
+
+#### **Network Health Checker**
+```bash
+#!/bin/bash
+# network-monitor.sh - Run via cron every 5 minutes
+
+HEALTHCHECK_URL="http://localhost:8080/health"
+EXTERNAL_HOSTS="8.8.8.8 1.1.1.1 google.com"
+ALERT_WEBHOOK="YOUR_SLACK_WEBHOOK_URL"
+
+check_internet() {
+    for host in $EXTERNAL_HOSTS; do
+        if ping -c 2 -W 3000 $host >/dev/null 2>&1; then
+            return 0  # Internet is up
+        fi
+    done
+    return 1  # Internet is down
+}
+
+check_api_health() {
+    response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 $HEALTHCHECK_URL)
+    [ "$response" = "200" ]
+}
+
+send_alert() {
+    local message="$1"
+    local priority="$2"
+    
+    # Slack notification
+    curl -X POST -H 'Content-type: application/json' \
+        --data "{\"text\":\"🚨 Scanner Alert [$priority]: $message\"}" \
+        $ALERT_WEBHOOK
+    
+    # SMS via curl (Twilio, TextBelt, etc.)
+    # curl -X POST https://textbelt.com/text \
+    #     -d phone=YOUR_PHONE \
+    #     -d message="Scanner Alert: $message" \
+    #     -d key=YOUR_TEXTBELT_KEY
+    
+    # Email via mailgun/sendmail
+    echo "$message" | mail -s "Scanner Alert" admin@yourdomain.com
+    
+    # macOS notification
+    osascript -e "display notification \"$message\" with title \"Scanner Alert\""
+}
+
+# Check internet connectivity
+if ! check_internet; then
+    send_alert "Internet connectivity lost - scanner offline" "CRITICAL"
+    exit 1
+fi
+
+# Check API health
+if ! check_api_health; then
+    send_alert "Scanner API health check failed - service may be down" "HIGH"
+    exit 1
+fi
+
+echo "$(date): All systems operational"
+```
+
+#### **Cron Job Setup**
+```bash
+# Add to crontab: crontab -e
+*/5 * * * * /usr/local/bin/network-monitor.sh >> /var/log/scanner-monitor.log 2>&1
+```
+
+### Alert Configuration Options
+
+#### **Multi-Channel Alerting**
+```javascript
+// alerts.js - Notification system
+const alertChannels = {
+  // Slack (free)
+  slack: {
+    webhook: process.env.SLACK_WEBHOOK,
+    enabled: true,
+    priorities: ['CRITICAL', 'HIGH']
+  },
+  
+  // SMS (paid - $0.01-0.05 per message)
+  sms: {
+    service: 'textbelt', // or 'twilio'
+    phone: process.env.ALERT_PHONE,
+    enabled: false,  // Enable for production
+    priorities: ['CRITICAL']
+  },
+  
+  // Email (free with most providers)
+  email: {
+    to: process.env.ALERT_EMAIL,
+    enabled: true,
+    priorities: ['CRITICAL', 'HIGH', 'MEDIUM']
+  },
+  
+  // Push notifications (free)
+  push: {
+    service: 'pushover', // or 'ntfy'
+    enabled: true,
+    priorities: ['HIGH', 'MEDIUM']
+  }
+};
+
+async function sendAlert(message, priority = 'MEDIUM') {
+  for (const [channel, config] of Object.entries(alertChannels)) {
+    if (config.enabled && config.priorities.includes(priority)) {
+      await sendToChannel(channel, message, priority);
+    }
+  }
+}
+```
+
+#### **Smart Alert Rules**
+```typescript
+// Prevent alert spam
+const alertCooldowns = new Map();
+
+function shouldSendAlert(alertType: string, cooldownMinutes = 30): boolean {
+  const lastSent = alertCooldowns.get(alertType);
+  const now = Date.now();
+  
+  if (!lastSent || (now - lastSent) > (cooldownMinutes * 60 * 1000)) {
+    alertCooldowns.set(alertType, now);
+    return true;
+  }
+  
+  return false;
+}
+
+// Usage
+if (!apiHealthy && shouldSendAlert('api_down', 15)) {
+  await sendAlert('Scanner API is down', 'CRITICAL');
+}
+```
+
+### Monitoring Dashboard (Optional)
+
+#### **Simple Status Page**
+```html
+<!-- status.html - Serve at /status -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Scanner Status</title>
+    <meta http-equiv="refresh" content="30">
+</head>
+<body>
+    <h1>Security Scanner Status</h1>
+    <div id="status"></div>
+    
+    <script>
+        async function updateStatus() {
+            try {
+                const response = await fetch('/health');
+                const health = await response.json();
+                
+                document.getElementById('status').innerHTML = `
+                    <h2>Overall Status: ${health.status}</h2>
+                    <p>Uptime: ${Math.floor(health.uptime / 3600)}h ${Math.floor((health.uptime % 3600) / 60)}m</p>
+                    <h3>Services:</h3>
+                    <ul>
+                        ${Object.entries(health.services).map(([service, status]) => 
+                            `<li>${service}: <span style="color: ${status.status === 'ok' ? 'green' : 'red'}">${status.status}</span></li>`
+                        ).join('')}
+                    </ul>
+                `;
+            } catch (error) {
+                document.getElementById('status').innerHTML = '<h2 style="color: red">API Unreachable</h2>';
+            }
+        }
+        
+        updateStatus();
+        setInterval(updateStatus, 30000);
+    </script>
+</body>
+</html>
+```
+
+---
+
+## 🔄 VPS Backup Deployment Strategy
+
+*Priority: Low - Emergency failover for extended outages*
+
+### Architecture Overview
+
+```
+Primary:    Mac Mini (home) ────────────── 90% of scans
+                │
+                │ (health monitoring)
+                ▼
+Backup:     VPS (cloud) ─────────────────── Automatic failover
+                │
+                │ (DNS switching)
+                ▼
+Clients:    Website/API ─────────────────── Seamless experience
+```
+
+### VPS Provider Comparison
+
+#### **Recommended: Hetzner Cloud**
+```bash
+Instance:   CX31 (4 vCPU, 8GB RAM)
+Storage:    80GB NVMe SSD  
+Network:    20TB traffic included
+Location:   US-East or US-West
+Cost:       €7.39/month (~$8 USD)
+```
+
+#### **Alternative: DigitalOcean**
+```bash
+Instance:   Basic Droplet (4 vCPU, 8GB RAM)
+Storage:    160GB SSD
+Network:    5TB traffic included  
+Location:   NYC/SFO
+Cost:       $48/month
+```
+
+### Containerized Deployment
+
+#### **Dockerfile for VPS**
+```dockerfile
+# Dockerfile.vps
+FROM ubuntu:22.04
+
+# Install security tools
+RUN apt-get update && apt-get install -y \
+    curl \
+    nodejs \
+    npm \
+    postgresql-client \
+    nmap \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install httpx
+RUN wget -O /usr/local/bin/httpx https://github.com/projectdiscovery/httpx/releases/download/v1.3.7/httpx_1.3.7_linux_amd64.tar.gz && \
+    tar -xzf httpx* && \
+    chmod +x httpx && \
+    mv httpx /usr/local/bin/
+
+# Install nuclei  
+RUN wget -O /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.1.0/nuclei_3.1.0_linux_amd64.zip && \
+    unzip /tmp/nuclei.zip -d /usr/local/bin/ && \
+    chmod +x /usr/local/bin/nuclei
+
+# Copy scanner application
+COPY apps/workers /app
+WORKDIR /app
+
+RUN npm ci --only=production
+RUN npm run build
+
+# Environment variables
+ENV NODE_ENV=production
+ENV DATABASE_URL=postgresql://user:pass@db:5432/scanner_backup
+
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+CMD ["node", "dist/localServer.js"]
+```
+
+#### **Docker Compose for VPS**
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  scanner:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgresql://scanner:${DB_PASSWORD}@db:5432/scanner_backup
+      - NODE_ENV=production
+      - BACKUP_MODE=true
+    depends_on:
+      - db
+    restart: unless-stopped
+    
+  db:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=scanner_backup
+      - POSTGRES_USER=scanner
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+    
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+```
+
+### Deployment Automation
+
+#### **VPS Provisioning Script**
+```bash
+#!/bin/bash
+# deploy-vps-backup.sh
+
+set -e
+
+VPS_IP=${1:-"YOUR_VPS_IP"}
+SSH_KEY=${2:-"~/.ssh/id_rsa"}
+DOMAIN=${3:-"backup-scanner.yourdomain.com"}
+
+echo "🚀 Deploying scanner backup to VPS: $VPS_IP"
+
+# Copy files to VPS
+rsync -avz --exclude node_modules --exclude .git \
+    -e "ssh -i $SSH_KEY" \
+    ./ root@$VPS_IP:/opt/scanner/
+
+# Setup VPS environment
+ssh -i $SSH_KEY root@$VPS_IP << 'EOF'
+cd /opt/scanner
+
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+
+# Setup environment
+echo "DB_PASSWORD=$(openssl rand -hex 16)" > .env
+echo "BACKUP_MODE=true" >> .env
+
+# Deploy services
+docker-compose up -d
+
+# Wait for health check
+echo "⏳ Waiting for services to start..."
+sleep 30
+
+# Test deployment
+curl -f http://localhost:8080/health || {
+    echo "❌ Health check failed"
+    docker-compose logs
+    exit 1
+}
+
+echo "✅ VPS backup deployment successful"
+EOF
+
+echo "🎉 Backup scanner deployed to: https://$DOMAIN"
+```
+
+### DNS Failover Strategy
+
+#### **Cloudflare API Integration**
+```typescript
+// dns-failover.ts
+import { Cloudflare } from 'cloudflare';
+
+const cf = new Cloudflare({
+    apiToken: process.env.CLOUDFLARE_API_TOKEN
+});
+
+const DNS_CONFIG = {
+    zone_id: process.env.CLOUDFLARE_ZONE_ID,
+    record_name: 'scanner.yourdomain.com',
+    primary_ip: process.env.PRIMARY_IP,    // ngrok or home IP
+    backup_ip: process.env.BACKUP_VPS_IP   // VPS IP
+};
+
+async function switchToBackup() {
+    await cf.dns.records.edit(DNS_CONFIG.zone_id, DNS_CONFIG.record_id, {
+        type: 'A',
+        name: DNS_CONFIG.record_name,
+        content: DNS_CONFIG.backup_ip,
+        ttl: 300  // 5 minute TTL for fast failover
+    });
+    
+    console.log('🔄 DNS switched to backup VPS');
+}
+
+async function switchToPrimary() {
+    await cf.dns.records.edit(DNS_CONFIG.zone_id, DNS_CONFIG.record_id, {
+        type: 'A', 
+        name: DNS_CONFIG.record_name,
+        content: DNS_CONFIG.primary_ip,
+        ttl: 300
+    });
+    
+    console.log('🏠 DNS switched back to primary');
+}
+```
+
+### Monitoring & Failover Logic
+
+#### **Automated Failover Script**
+```bash
+#!/bin/bash
+# auto-failover.sh - Run every 2 minutes
+
+PRIMARY_URL="https://scanner.yourdomain.com"
+BACKUP_URL="https://backup-scanner.yourdomain.com"
+CURRENT_STATE_FILE="/tmp/scanner-state"
+
+check_health() {
+    local url=$1
+    curl -sf --max-time 10 "$url/health" >/dev/null 2>&1
+}
+
+get_current_state() {
+    [ -f "$CURRENT_STATE_FILE" ] && cat "$CURRENT_STATE_FILE" || echo "primary"
+}
+
+set_current_state() {
+    echo "$1" > "$CURRENT_STATE_FILE"
+}
+
+send_failover_alert() {
+    local direction=$1
+    curl -X POST -H 'Content-type: application/json' \
+        --data "{\"text\":\"🔄 Scanner failover: Switched to $direction\"}" \
+        "$SLACK_WEBHOOK"
+}
+
+# Check primary health
+if check_health "$PRIMARY_URL"; then
+    # Primary is healthy
+    if [ "$(get_current_state)" = "backup" ]; then
+        echo "Primary recovered, switching back..."
+        node dns-failover.js switch-primary
+        set_current_state "primary"
+        send_failover_alert "primary (recovery)"
+    fi
+else
+    # Primary is down, check backup
+    if check_health "$BACKUP_URL"; then
+        if [ "$(get_current_state)" = "primary" ]; then
+            echo "Primary down, switching to backup..."
+            node dns-failover.js switch-backup
+            set_current_state "backup"
+            send_failover_alert "backup (failover)"
+        fi
+    else
+        # Both are down - critical alert
+        if [ "$(get_current_state)" != "both_down" ]; then
+            curl -X POST -H 'Content-type: application/json' \
+                --data "{\"text\":\"🚨 CRITICAL: Both scanner instances are down!\"}" \
+                "$SLACK_WEBHOOK"
+            set_current_state "both_down"
+        fi
+    fi
+fi
+```
+
+### Database Sync Strategy
+
+#### **Simple Backup Approach** (Recommended)
+```bash
+# Option 1: VPS starts fresh during outages
+# - No data sync complexity
+# - New scans go to VPS database
+# - Primary database intact when recovered
+# - Minimal setup required
+
+# Pros: Simple, reliable, no sync conflicts
+# Cons: No historical data on backup, scan history gap
+```
+
+#### **Periodic Sync Approach** (Advanced)
+```bash
+#!/bin/bash
+# sync-to-backup.sh - Run daily
+
+# Export recent scans from primary
+pg_dump --host=localhost \
+        --username=scanner \
+        --dbname=scanner_local \
+        --table=scans \
+        --table=findings \
+        --table=artifacts \
+        --where="created_at > NOW() - INTERVAL '7 days'" \
+        --data-only > /tmp/recent_data.sql
+
+# Upload to VPS
+scp /tmp/recent_data.sql root@$VPS_IP:/tmp/
+
+# Import to backup database  
+ssh root@$VPS_IP "
+    docker-compose exec -T db psql -U scanner scanner_backup < /tmp/recent_data.sql
+"
+```
+
+### Cost Analysis
+
+#### **Annual Cost Comparison**
+```
+Cellular Backup:    $600-1200/year  (moderate utility)
+VPS Backup:         $60-240/year    (high utility)
+Dual ISP:           $1200-2400/year (overkill)
+No Backup:          $0/year         (acceptable risk)
+```
+
+#### **VPS Additional Benefits**
+- ✅ **Development environment** (test changes safely)
+- ✅ **Geographic load balancing** (serve different regions)
+- ✅ **Performance comparison** (Mac Mini vs cloud)
+- ✅ **Scaling experiments** (test concurrent scan limits)
+- ✅ **Security research** (different network perspective)
+
+### Implementation Timeline
+
+#### **Phase 1: Basic Setup** (2-3 hours)
+- [ ] Containerize scanner application
+- [ ] Provision Hetzner VPS
+- [ ] Deploy Docker Compose stack
+- [ ] Test basic scan functionality
+
+#### **Phase 2: DNS Integration** (1 hour)  
+- [ ] Setup Cloudflare DNS management
+- [ ] Configure backup subdomain
+- [ ] Test manual DNS switching
+- [ ] Document failover procedures
+
+#### **Phase 3: Automation** (2-3 hours)
+- [ ] Implement health checking script
+- [ ] Setup automated DNS failover
+- [ ] Configure alerting system
+- [ ] Test end-to-end failover
+
+#### **Phase 4: Monitoring** (1 hour)
+- [ ] Setup backup monitoring dashboard
+- [ ] Configure alert channels
+- [ ] Test alert delivery
+- [ ] Document operational procedures
+
+### 🎯 Recommendation
+
+**Start with alerting, defer VPS backup:**
+
+1. **Implement basic alerting** (2-3 hours investment)
+   - iPhone hotspot for emergency coverage
+   - Slack notifications for downtime
+   - Health monitoring scripts
+
+2. **Consider VPS backup later** if:
+   - Outages become frequent (>1 per month)
+   - Business grows to need 99.9% SLA  
+   - Want geographic redundancy
+   - Need development/testing environment
+
+The VPS backup is excellent engineering but likely overkill for current needs. The alerting system provides 90% of the benefit for 10% of the effort.
+
+---
+
+## 💻 Remote Development & Deployment
+
+*See: [remotedeploy.md](./remotedeploy.md) for complete implementation guide*
+
+### Development Workflow Options
+
+#### **Recommended: VS Code Remote SSH** (5-minute setup)
+```bash
+# Edit directly on Mac Mini via SSH
+# Full IDE features with zero sync lag
+# Perfect for active development
+```
+
+#### **Production: Git Deployment Hooks** (15-minute setup)  
+```bash
+# One-command deployment: git push production main
+# Automatic build, restart, and rollback capability
+# Ideal for production releases
+```
+
+#### **Alternative Methods**
+- **rsync Scripts**: Fast file sync with watch mode
+- **Docker Development**: Isolated containerized environment
+- **GitHub Actions**: Full CI/CD pipeline with team collaboration
+
+### Quick Start
+```bash
+# 1. Setup VS Code Remote SSH (primary development)
+Host mac-mini
+    HostName YOUR_MAC_MINI_IP
+    User your-username
+
+# 2. Setup Git deployment (production releases)
+git remote add production user@mac-mini:/opt/scanner.git
+git push production main  # Auto-deploys and restarts
+
+# Best of both worlds: Live development + automated deployment
+```
+
+**Benefits:**
+- ✅ **Zero deployment friction** - Push code from anywhere
+- ✅ **Full development environment** - Native macOS tools accessible
+- ✅ **Automatic restarts** - PM2 integration with Git hooks
+- ✅ **Version control** - Full Git history on production server
+
+*Complete setup instructions, security considerations, and troubleshooting in [remotedeploy.md](./remotedeploy.md)*

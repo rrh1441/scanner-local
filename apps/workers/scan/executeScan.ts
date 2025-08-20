@@ -58,81 +58,51 @@ export async function executeScan(job: ScanJob): Promise<ScanResult> {
     }
   };
 
-  // Run all 16 Tier 1 scans in parallel (accessibility moved to Tier 2)
-  const scanPromises = [
-    timeModule('breach_directory_probe', runBreachDirectoryProbe({ domain, scanId: scan_id })),
-    
+  // Optimized staged execution to prevent network congestion
+  // Stage 1: Fast, non-network intensive scans
+  console.log('[SCAN] Stage 1: Running fast scans');
+  const stage1Results = await Promise.all([
     timeModule('shodan_scan', runShodanScan({ domain, scanId: scan_id, companyName })),
-    
-    timeModule('document_exposure', runDocumentExposure({ companyName, domain, scanId: scan_id })),
-    
     timeModule('whois_wrapper', runWhoisWrapper({ domain, scanId: scan_id })),
-    
-    // ai_path_finder moved to Tier 2 - was taking 90+ seconds
-    
-    timeModule('endpoint_discovery', runEndpointDiscovery({ domain, scanId: scan_id })),
-    
-    timeModule('tech_stack_scan', runTechStackScan({ domain, scanId: scan_id })),
-    
+    timeModule('spf_dmarc', runSpfDmarc({ domain, scanId: scan_id })),
     timeModule('abuse_intel_scan', runAbuseIntelScan({ scanId: scan_id })),
-    
-    // accessibility_scan moved to Tier 2 - too slow
-    
+    timeModule('client_secret_scanner', runClientSecretScanner({ scanId: scan_id })),
+    timeModule('backend_exposure_scanner', runBackendExposureScanner({ scanId: scan_id })),
+    timeModule('denial_wallet_scan', runDenialWalletScan({ domain, scanId: scan_id })),
     timeModule('lightweight_cve_check', (async () => {
       const result = await runLightweightCveCheck({ scanId: scan_id, domain, artifacts: [] });
       return result.findings ? result.findings.length : 0;
-    })()),
-    
-    timeModule('tls_scan', runTlsScan({ domain, scanId: scan_id })),
-    
-    timeModule('spf_dmarc', runSpfDmarc({ domain, scanId: scan_id })),
-    
-    timeModule('client_secret_scanner', runClientSecretScanner({ scanId: scan_id })),
-    
-    timeModule('backend_exposure_scanner', runBackendExposureScanner({ scanId: scan_id })),
-    
-    timeModule('config_exposure', runConfigExposureScanner({ domain, scanId: scan_id })),
-    
-    timeModule('denial_wallet_scan', runDenialWalletScan({ domain, scanId: scan_id })),
-  ];
+    })()), 
+  ]);
 
-  // Add overall timeout protection to prevent hanging scans
-  const SCAN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes total timeout
-  const timeoutPromise = new Promise((_, reject) => 
-    setTimeout(() => reject(new Error('Scan timeout - exceeded 5 minutes')), SCAN_TIMEOUT_MS)
-  );
+  // Stage 2: Medium network intensity (run with limited concurrency)
+  console.log('[SCAN] Stage 2: Running medium intensity scans');
+  const stage2Results = await Promise.all([
+    timeModule('breach_directory_probe', runBreachDirectoryProbe({ domain, scanId: scan_id })),
+    timeModule('document_exposure', runDocumentExposure({ companyName, domain, scanId: scan_id })),
+    timeModule('config_exposure', runConfigExposureScanner({ domain, scanId: scan_id })),
+  ]);
+
+  // Stage 3: High network intensity (run sequentially to avoid overwhelming target)
+  console.log('[SCAN] Stage 3: Running intensive scans sequentially');
+  const stage3Results = [];
   
-  console.log(`[executeScan] Starting ${scanPromises.length} modules with ${SCAN_TIMEOUT_MS/1000}s timeout...`);
+  // TLS scan first (usually has good caching)
+  stage3Results.push(await timeModule('tls_scan', runTlsScan({ domain, scanId: scan_id })));
   
-  let results: any[];
-  try {
-    const settledResults = await Promise.race([
-      Promise.allSettled(scanPromises), // Use allSettled instead of all to prevent one failure from killing everything
-      timeoutPromise
-    ]) as PromiseSettledResult<any>[];
-    
-    // Convert allSettled results back to our format
-    results = settledResults.map((result, index) => {
-      if (result.status === 'fulfilled') {
-        return result.value;
-      } else {
-        console.error(`Module failed with rejection:`, result.reason);
-        return { success: false, error: result.reason?.message || 'Module rejected', module: `module_${index}` };
-      }
-    });
-    
-    console.log(`[executeScan] Completed with ${results.filter(r => r.success).length}/${results.length} modules successful`);
-  } catch (error) {
-    // Timeout occurred
-    console.error(`[executeScan] SCAN TIMEOUT after ${SCAN_TIMEOUT_MS/1000} seconds:`, error);
-    
-    // Create failure results for all modules since we don't know which ones completed
-    results = scanPromises.map((_, index) => ({
-      success: false,
-      error: 'Scan timeout exceeded',
-      module: `module_${index}`
-    }));
-  }
+  // Then endpoint discovery (most intensive)
+  stage3Results.push(await timeModule('endpoint_discovery', runEndpointDiscovery({ domain, scanId: scan_id })));
+  
+  // Finally tech stack scan
+  stage3Results.push(await timeModule('tech_stack_scan', runTechStackScan({ domain, scanId: scan_id })));
+
+  // Combine all results
+  const scanPromises = [...stage1Results, ...stage2Results, ...stage3Results];
+
+  console.log(`[executeScan] Completed all ${scanPromises.length} modules in staged execution`);
+  
+  // scanPromises now contains all the completed results from our staged execution
+  const results = [...scanPromises]; // Create mutable copy
   
   // Run asset correlator after all other modules complete
   const assetStart = Date.now();
