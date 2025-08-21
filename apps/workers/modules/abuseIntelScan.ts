@@ -74,9 +74,41 @@ async function jitteredDelay(): Promise<void> {
  * Query artifact store for all IP artifacts from the current scan
  */
 async function getIPArtifacts(scanId: string): Promise<IPArtifact[]> {
-  // Starting fresh - no existing artifacts to query
-  log(`Starting fresh scan for ${scanId}`);
-  return [];
+  try {
+    const { LocalStore } = await import('../core/localStore.js');
+    const store = new LocalStore();
+    
+    try {
+      const result = await store.query(
+        'SELECT metadata FROM artifacts WHERE scan_id = $1 AND type = $2',
+        [scanId, 'network_discovery']
+      );
+      
+      const ipArtifacts: IPArtifact[] = [];
+      
+      for (const row of result.rows) {
+        if (row.metadata?.ips) {
+          // Convert IPs from metadata to artifact format
+          for (const ip of row.metadata.ips) {
+            ipArtifacts.push({
+              id: Date.now() + Math.floor(Math.random() * 1000), // Generate a fake integer ID for compatibility
+              val_text: ip.trim(),
+              meta: { source: 'network_discovery' }
+            });
+          }
+        }
+      }
+      
+      log(`Found ${ipArtifacts.length} IP artifacts for scan ${scanId}`);
+      return ipArtifacts;
+      
+    } finally {
+      await store.close();
+    }
+  } catch (error) {
+    log(`Error querying IP artifacts: ${(error as Error).message}`);
+    return [];
+  }
 }
 
 /**

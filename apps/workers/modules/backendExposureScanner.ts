@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import fetch, { Response } from 'node-fetch';
 import pThrottle from 'p-throttle';
 import { AbortController } from 'abort-controller';
+import WebSocket from 'ws';
 
 import { BackendIdentifier } from './endpointDiscovery.js';
 import { insertArtifact, insertFinding } from '../core/artifactStore.js';
@@ -92,7 +93,7 @@ async function throttledFetch(url: string): Promise<Response> {
 
 async function probeWS(url: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const ws = new (require('ws'))(url, { handshakeTimeout: WS_TIMEOUT });
+    const ws = new WebSocket(url, { handshakeTimeout: WS_TIMEOUT });
     ws.on('open', () => { ws.terminate(); resolve(true); });
     ws.on('error', () => resolve(false));
   });
@@ -108,11 +109,35 @@ function sha256Body(body: string): string {
 
 export async function runBackendExposureScanner(job: { scanId: string }): Promise<number> {
   log('[backendExposureScanner] ▶ start', job.scanId);
-    // Pool query removed for GCP migration - starting fresh
-    const rows: any[] = [];
-    const result = { rows: [] };  if (!rows.length) { log('no backend identifiers'); return 0; }
-
-  const ids: BackendIdentifier[] = rows[0].ids ?? [];
+  
+  // Get backend identifiers from database
+  const { LocalStore } = await import('../core/localStore.js');
+  const store = new LocalStore();
+  
+  let ids: BackendIdentifier[] = [];
+  
+  try {
+    const result = await store.query(
+      'SELECT metadata FROM artifacts WHERE scan_id = $1 AND type = $2',
+      [job.scanId, 'backend_identifiers']
+    );
+    
+    for (const row of result.rows) {
+      if (row.metadata?.backend_ids) {
+        ids = ids.concat(row.metadata.backend_ids);
+      } else if (row.metadata?.ids) {
+        // Handle test data format
+        ids = ids.concat(row.metadata.ids);
+      }
+    }
+  } finally {
+    await store.close();
+  }
+  
+  if (!ids.length) { 
+    log('no backend identifiers'); 
+    return 0; 
+  }
   const backoff: ProbeState = Object.create(null);
   let findings = 0;
 

@@ -12,7 +12,7 @@ import { runEndpointDiscovery } from './modules/endpointDiscovery.js';
 import { runTechStackScan } from './modules/techStackScan.js';
 import { runAbuseIntelScan } from './modules/abuseIntelScan.js';
 import { runAccessibilityScan } from './modules/accessibilityScan.js';
-import { runBreachDirectoryProbe } from './modules/breachDirectoryProbe.js';
+import { runInfostealerProbe } from './modules/infostealerProbe.js';
 import { runAssetCorrelator } from './modules/assetCorrelator.js';
 import { runConfigExposureScanner } from './modules/configExposureScanner.js';
 import { runBackendExposureScanner } from './modules/backendExposureScanner.js';
@@ -131,7 +131,7 @@ export async function processScan(job: ScanJob) {
     if (activeModules.includes('breach_directory_probe')) {
       log(`[breach_directory_probe] STARTING - scan_id=${scanId}`);
       parallelModules.breach_directory_probe = runModuleWithTimeout('breach_directory_probe', 
-        () => runBreachDirectoryProbe({ domain, scanId }), 
+        () => runInfostealerProbe({ domain, scanId }), 
         3 * 60 * 1000, scanId);
     }
     if (activeModules.includes('shodan')) {

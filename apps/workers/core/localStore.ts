@@ -94,6 +94,12 @@ export class LocalStore {
           type TEXT NOT NULL,
           file_path TEXT NOT NULL,
           size_bytes INTEGER,
+          severity TEXT,
+          val_text TEXT,
+          src_url TEXT,
+          sha256 TEXT,
+          mime_type TEXT,
+          metadata JSONB,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (scan_id) REFERENCES scans (id)
         );
@@ -109,6 +115,14 @@ export class LocalStore {
 
   // Database operations
   async insertScan(scan: Partial<ScanData>): Promise<void> {
+    console.log('[LocalStore] insertScan called with:', {
+      id: scan.id,
+      status: scan.status,
+      findings_count: scan.findings_count,
+      artifacts_count: scan.artifacts_count,
+      duration_ms: scan.duration_ms
+    });
+    
     const client = await this.pool.connect();
     try {
       await client.query(`
@@ -127,8 +141,8 @@ export class LocalStore {
         scan.status || 'pending',
         scan.created_at || new Date(),
         scan.completed_at,
-        scan.findings_count || 0,
-        scan.artifacts_count || 0,
+        scan.findings_count ?? 0,
+        scan.artifacts_count ?? 0,
         scan.duration_ms,
         scan.metadata
       ]);
@@ -159,12 +173,12 @@ export class LocalStore {
     }
   }
 
-  async insertArtifact(artifact: Partial<ArtifactData>): Promise<void> {
+  async insertArtifact(artifact: Partial<ArtifactData & {severity?: string, val_text?: string, src_url?: string, sha256?: string, mime_type?: string, metadata?: any}>): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query(`
-        INSERT INTO artifacts (id, scan_id, type, file_path, size_bytes, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO artifacts (id, scan_id, type, file_path, size_bytes, severity, val_text, src_url, sha256, mime_type, metadata, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (id) DO NOTHING
       `, [
         artifact.id,
@@ -172,6 +186,12 @@ export class LocalStore {
         artifact.type,
         artifact.file_path,
         artifact.size_bytes || 0,
+        (artifact as any).severity,
+        (artifact as any).val_text,
+        (artifact as any).src_url,
+        (artifact as any).sha256,
+        (artifact as any).mime_type,
+        (artifact as any).metadata,
         artifact.created_at || new Date()
       ]);
     } finally {
@@ -258,6 +278,25 @@ export class LocalStore {
       return filePath;
     } catch {
       return null;
+    }
+  }
+
+  async getArtifactCount(scanId: string): Promise<number> {
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query('SELECT COUNT(*) FROM artifacts WHERE scan_id = $1', [scanId]);
+      return parseInt(result.rows[0].count);
+    } finally {
+      client.release();
+    }
+  }
+
+  async query(text: string, params?: any[]): Promise<any> {
+    const client = await this.pool.connect();
+    try {
+      return await client.query(text, params);
+    } finally {
+      client.release();
     }
   }
 

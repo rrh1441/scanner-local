@@ -49,7 +49,7 @@ interface RawArtifact {
   ip?: string;
   host?: string;
   port?: number | string;
-  meta: any;
+  metadata: any;
   hostnames_json?: string;
   product?: string;
   version?: string;
@@ -160,20 +160,20 @@ async function correlateAssets(scanId: string, domain: string): Promise<void> {
       type, 
       val_text, 
       severity,
-      meta->>'ip' AS ip,
-      meta->>'host' AS host, 
-      meta->>'port' AS port,
-      meta->>'hostnames' AS hostnames_json,
-      meta->>'product' AS product,
-      meta->>'version' AS version,
-      meta->>'org' AS org,
-      meta->>'asn' AS asn,
-      meta->>'cve' AS cve,
-      meta->>'cvss' AS cvss,
-      meta->>'epss_score' AS epss,
-      meta
+      metadata->>'ip' AS ip,
+      metadata->>'host' AS host, 
+      metadata->>'port' AS port,
+      metadata->>'hostnames' AS hostnames_json,
+      metadata->>'product' AS product,
+      metadata->>'version' AS version,
+      metadata->>'org' AS org,
+      metadata->>'asn' AS asn,
+      metadata->>'cve' AS cve,
+      metadata->>'cvss' AS cvss,
+      metadata->>'epss_score' AS epss,
+      metadata
     FROM artifacts 
-    WHERE meta->>'scan_id' = $1
+    WHERE scan_id = $1
     ORDER BY created_at`;
 
   let artifactCount = 0;
@@ -184,9 +184,16 @@ async function correlateAssets(scanId: string, domain: string): Promise<void> {
   let artifactBuffer: RawArtifact[] = [];
   
   try {
-    // Pool query removed for GCP migration - starting fresh
-    const rows: RawArtifact[] = [];
-    const result = { rows: rows };
+    // Get database connection
+    const { LocalStore } = await import('../core/localStore.js');
+    const store = new LocalStore();
+    
+    let result: { rows: RawArtifact[] };
+    try {
+      result = await store.query(query, [scanId]);
+    } finally {
+      await store.close();
+    }
     
     for (const row of result.rows) {
       artifactBuffer.push(row);
@@ -340,8 +347,8 @@ function extractIPs(artifact: RawArtifact, hostnameToIps: Map<string, string[]>)
   if (artifact.ip) ips.add(artifact.ip);
   
   // IPs from meta
-  if (artifact.meta?.ips) {
-    artifact.meta.ips.forEach((ip: string) => ips.add(ip));
+  if (artifact.metadata?.ips) {
+    artifact.metadata.ips.forEach((ip: string) => ips.add(ip));
   }
   
   // IP artifacts
@@ -392,8 +399,8 @@ function validateHostnameAffinity(
   }
   
   // If from TLS cert, trust it even without DNS match
-  if (artifact.type === 'tls_scan' && artifact.meta?.cert_hostnames) {
-    artifact.meta.cert_hostnames.forEach((h: string) => {
+  if (artifact.type === 'tls_scan' && artifact.metadata?.cert_hostnames) {
+    artifact.metadata.cert_hostnames.forEach((h: string) => {
       if (!validHostnames.includes(h)) {
         validHostnames.push(h);
       }

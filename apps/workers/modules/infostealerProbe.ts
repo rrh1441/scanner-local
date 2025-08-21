@@ -1,11 +1,11 @@
 /**
- * Breach Directory Probe Module
+ * Infostealer Probe Module
  * 
- * Queries BreachDirectory and LeakCheck APIs for comprehensive domain breach intelligence
- * to identify compromised accounts and breach exposure statistics.
+ * Queries LeakCheck API for comprehensive domain breach intelligence
+ * to identify compromised accounts and infostealer malware exposure.
  */
 
-import { httpClient } from '../net/httpClient.js';
+import axios from 'axios';
 import { insertArtifact, insertFinding } from '../core/artifactStore.js';
 import { logLegacy as rootLog } from '../core/logger.js';
 import { executeModule, apiCall } from '../util/errorHandler.js';
@@ -18,7 +18,7 @@ const MAX_SAMPLE_USERNAMES = 100;
 const LEAKCHECK_RATE_LIMIT_MS = 350; // 3 requests per second = ~333ms + buffer
 
 // Enhanced logging
-const log = (...args: unknown[]) => rootLog('[breachDirectoryProbe]', ...args);
+const log = (...args: unknown[]) => rootLog('[infostealerProbe]', ...args);
 
 interface BreachDirectoryResponse {
   breached_total?: number;
@@ -112,7 +112,7 @@ async function queryBreachDirectory(domain: string, apiKey: string): Promise<Bre
   const operation = async () => {
     log(`Querying Breach Directory for domain: ${domain}`);
     
-    const response = await httpClient.get(BREACH_DIRECTORY_API_BASE, {
+    const response = await axios.get(BREACH_DIRECTORY_API_BASE, {
       params: {
         method: 'domain',
         key: apiKey,
@@ -161,47 +161,33 @@ async function queryBreachDirectory(domain: string, apiKey: string): Promise<Bre
  * Query LeakCheck API for domain breach data
  */
 async function queryLeakCheck(domain: string, apiKey: string): Promise<LeakCheckResponse> {
-  const operation = async () => {
-    log(`Querying LeakCheck for domain: ${domain}`);
-    
-    const response = await httpClient.get(`${LEAKCHECK_API_BASE}/query/${domain}`, {
-      headers: {
-        'Accept': 'application/json',
-        'X-API-Key': apiKey
-      },
-      params: {
-        type: 'domain',
-        limit: 1000 // Max allowed
-      },
-      timeout: API_TIMEOUT_MS,
-      validateStatus: (status) => status < 500 // Accept 4xx as valid responses
-    });
-    
-    if (response.status === 200) {
-      const data = response.data as LeakCheckResponse;
-      log(`LeakCheck response for ${domain}: ${data.found || 0} accounts found`);
-      return data;
-    } else if (response.status === 404) {
-      log(`No leak data found for domain: ${domain}`);
-      return { success: false, found: 0, quota: 0, result: [] };
-    } else {
-      const responseData = response.data || {};
-      const errorMessage = responseData.error || `HTTP ${response.status}`;
-      throw new Error(`LeakCheck API error: ${errorMessage}`);
-    }
-  };
-
-  const result = await apiCall(operation, {
-    moduleName: 'breachDirectoryProbe', 
-    operation: 'queryLeakCheck',
-    target: domain
+  log(`Querying LeakCheck for domain: ${domain}`);
+  
+  const response = await axios.get(`${LEAKCHECK_API_BASE}/query/${domain}`, {
+    headers: {
+      'Accept': 'application/json',
+      'X-API-Key': apiKey
+    },
+    params: {
+      type: 'domain',
+      limit: 1000 // Max allowed
+    },
+    timeout: API_TIMEOUT_MS,
+    validateStatus: (status) => status < 500 // Accept 4xx as valid responses
   });
-
-  if (!result.success) {
-    throw new Error((result as any).error);
+  
+  if (response.status === 200) {
+    const data = response.data as LeakCheckResponse;
+    log(`LeakCheck response for ${domain}: ${data.found || 0} accounts found`);
+    return data;
+  } else if (response.status === 404) {
+    log(`No leak data found for domain: ${domain}`);
+    return { success: false, found: 0, quota: 0, result: [] };
+  } else {
+    const responseData = response.data || {};
+    const errorMessage = responseData.error || `HTTP ${response.status}`;
+    throw new Error(`LeakCheck API error: ${errorMessage}`);
   }
-
-  return result.data;
 }
 
 /**
@@ -536,16 +522,17 @@ function generateBreachSummary(results: BreachProbeSummary[]): {
 /**
  * Main breach directory probe function
  */
-export async function runBreachDirectoryProbe(job: { domain: string; scanId: string }): Promise<number> {
+export async function runInfostealerProbe(job: { domain: string; scanId: string }): Promise<number> {
   const { domain, scanId } = job;
   
-  return executeModule('breachDirectoryProbe', async () => {
+  return executeModule('infostealerProbe', async () => {
     const startTime = Date.now();
     
-    log(`Starting comprehensive breach probe for domain="${domain}" (BreachDirectory + LeakCheck)`);
+    log(`🔍 Starting infostealer probe for domain="${domain}" (LeakCheck), scan_id=${scanId}`);
     
     // Check for API key
     const leakCheckApiKey = process.env.LEAKCHECK_API_KEY;
+    log(`🔑 LEAKCHECK_API_KEY: ${leakCheckApiKey ? 'SET' : 'MISSING'}`);
     
     if (!leakCheckApiKey) {
       log('LeakCheck API key not found - need LEAKCHECK_API_KEY environment variable');
@@ -559,9 +546,10 @@ export async function runBreachDirectoryProbe(job: { domain: string; scanId: str
     // Query LeakCheck
     try {
       leakCheckData = await queryLeakCheck(domain, leakCheckApiKey);
-      log(`LeakCheck query successful: found ${leakCheckData.found} breaches`);
+      log(`✅ LeakCheck query successful: found ${leakCheckData.found} breaches`);
+      log(`🎯 LeakCheck API returned data: ${JSON.stringify(leakCheckData.result?.slice(0, 2) || [])}`);
     } catch (error) {
-      log(`LeakCheck query failed: ${(error as Error).message}`);
+      log(`❌ LeakCheck query failed: ${(error as Error).message}`);
       leakCheckData = { success: false, found: 0, quota: 0, result: [], error: (error as Error).message };
     }
     
@@ -581,7 +569,8 @@ export async function runBreachDirectoryProbe(job: { domain: string; scanId: str
       // Step 1: Consolidate breaches by unique user
       const consolidatedUsers = consolidateBreachesByUser(analysis.leakcheck_results);
       
-      log(`Consolidated ${analysis.leakcheck_results.length} breach records into ${consolidatedUsers.length} unique users`);
+      log(`📊 Processing ${analysis.leakcheck_results.length} breach results for findings insertion`);
+      log(`👥 Consolidated ${analysis.leakcheck_results.length} breach records into ${consolidatedUsers.length} unique users`);
       
       // Step 2: Group users by severity level
       const usersBySeverity = new Map<string, UserBreachRecord[]>();
@@ -643,12 +632,19 @@ export async function runBreachDirectoryProbe(job: { domain: string; scanId: str
           (allSources ? ` | Sources: ${allSources.slice(0, 100)}${allSources.length > 100 ? '...' : ''}` : '') +
           (timelineInfo ? ` | Timeline: ${timelineInfo}` : '');
         
-        await insertFinding(
-          artifactId,
-          mapSeverityToFindingType(severityLevel),
-          getRecommendationText(severityLevel),
-          detailedDescription
-        );
+        log(`💾 About to insert finding for ${severityLevel}: ${users.length} users, artifactId=${artifactId}`);
+        
+        await insertFinding({
+          artifact_id: artifactId,
+          finding_type: mapSeverityToFindingType(severityLevel),
+          recommendation: getRecommendationText(severityLevel),
+          description: detailedDescription,
+          scan_id: scanId,
+          severity: severityLevel,
+          type: mapSeverityToFindingType(severityLevel)
+        });
+        
+        log(`✅ Successfully inserted ${severityLevel} finding for ${users.length} users`);
         
         findingsCount++;
         

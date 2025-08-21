@@ -233,14 +233,54 @@ class DoWSafetyController {
 /**
  * Get endpoint artifacts from previous scans
  */
-async function getEndpointArtifacts(scanId: string): Promise<EndpointReport[]> {
+async function getEndpointArtifacts(scanId: string, domain?: string): Promise<EndpointReport[]> {
   try {
-    // Pool query removed for GCP migration - starting fresh
-    const rows: any[] = [];
-    const result = { rows: [] };    
-    const endpoints = rows[0]?.meta?.endpoints || [];
-    log(`Found ${endpoints.length} endpoints from endpoint discovery`);
-    return endpoints;
+    const { LocalStore } = await import('../core/localStore.js');
+    const store = new LocalStore();
+    
+    try {
+      const result = await store.query(
+        'SELECT metadata FROM artifacts WHERE scan_id = $1 AND type = $2',
+        [scanId, 'endpoint_discovery']
+      );
+      
+      const endpoints: EndpointReport[] = [];
+      
+      for (const row of result.rows) {
+        if (row.metadata?.endpoints) {
+          // Handle both array of strings and array of objects
+          for (const endpoint of row.metadata.endpoints) {
+            if (typeof endpoint === 'string') {
+              // Convert string paths to endpoint objects with EndpointReport structure
+              endpoints.push({
+                url: endpoint.startsWith('http') ? endpoint : `https://${domain || 'example.com'}${endpoint}`,
+                method: 'GET',
+                statusCode: 0,
+                responseTime: 0,
+                contentLength: 0,
+                headers: {}
+              });
+            } else if (endpoint.url) {
+              // Already an endpoint object - ensure it matches EndpointReport structure
+              endpoints.push({
+                url: endpoint.url,
+                method: endpoint.method || 'GET',
+                statusCode: endpoint.statusCode || 0,
+                responseTime: endpoint.responseTime || 0,
+                contentLength: endpoint.contentLength || 0,
+                headers: endpoint.headers || {}
+              });
+            }
+          }
+        }
+      }
+      
+      log(`Found ${endpoints.length} endpoints from endpoint discovery`);
+      return endpoints;
+      
+    } finally {
+      await store.close();
+    }
   } catch (error) {
     log(`Error querying endpoint artifacts: ${(error as Error).message}`);
     return [];
@@ -556,7 +596,7 @@ export async function runDenialWalletScan(job: { domain: string; scanId: string 
     let findingsCount = 0;
     
     // Get endpoints from previous discovery
-    const endpoints = await getEndpointArtifacts(scanId);
+    const endpoints = await getEndpointArtifacts(scanId, domain);
     
     if (endpoints.length === 0) {
       log('No endpoints found for DoW testing');

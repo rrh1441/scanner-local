@@ -2,14 +2,14 @@ import { runEndpointDiscovery } from '../modules/endpointDiscovery.js';
 import { runTlsScan } from '../modules/tlsScan.js';
 import { runSpfDmarc } from '../modules/spfDmarc.js';
 import { runConfigExposureScanner } from '../modules/configExposureScanner.js';
-import { runBreachDirectoryProbe } from '../modules/breachDirectoryProbe.js';
+import { runInfostealerProbe } from '../modules/infostealerProbe.js';
 import { runShodanScan } from '../modules/shodan.js';
 import { runDocumentExposure } from '../modules/documentExposure.js';
 import { runWhoisWrapper } from '../modules/whoisWrapper.js';
 // import { runAiPathFinder } from '../modules/aiPathFinder.js'; // Moved to Tier 2
 import { runTechStackScan } from '../modules/techStackScan.js';
 import { runAbuseIntelScan } from '../modules/abuseIntelScan.js';
-// import { runAccessibilityScan } from '../modules/accessibilityScan.js'; // Moved to Tier 2 - too slow
+import { runAccessibilityLightweight } from '../modules/accessibilityLightweight.js';
 // import { runNucleiLegacy as runNuclei } from '../modules/nuclei.js'; // Moved to Tier 2
 import { executeModule as runLightweightCveCheck } from '../modules/lightweightCveCheck.js';
 import { runClientSecretScanner } from '../modules/clientSecretScanner.js';
@@ -69,6 +69,7 @@ export async function executeScan(job: ScanJob): Promise<ScanResult> {
     timeModule('client_secret_scanner', runClientSecretScanner({ scanId: scan_id })),
     timeModule('backend_exposure_scanner', runBackendExposureScanner({ scanId: scan_id })),
     timeModule('denial_wallet_scan', runDenialWalletScan({ domain, scanId: scan_id })),
+    timeModule('accessibility_lightweight', runAccessibilityLightweight({ domain, scanId: scan_id })),
     timeModule('lightweight_cve_check', (async () => {
       const result = await runLightweightCveCheck({ scanId: scan_id, domain, artifacts: [] });
       return result.findings ? result.findings.length : 0;
@@ -78,7 +79,7 @@ export async function executeScan(job: ScanJob): Promise<ScanResult> {
   // Stage 2: Medium network intensity (run with limited concurrency)
   console.log('[SCAN] Stage 2: Running medium intensity scans');
   const stage2Results = await Promise.all([
-    timeModule('breach_directory_probe', runBreachDirectoryProbe({ domain, scanId: scan_id })),
+    timeModule('infostealer_probe', runInfostealerProbe({ domain, scanId: scan_id })),
     timeModule('document_exposure', runDocumentExposure({ companyName, domain, scanId: scan_id })),
     timeModule('config_exposure', runConfigExposureScanner({ domain, scanId: scan_id })),
   ]);

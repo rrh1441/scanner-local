@@ -28,7 +28,7 @@ const RPS          = Number.parseInt(process.env.SHODAN_RPS ?? '1', 10);       /
 const PAGE_LIMIT   = Number.parseInt(process.env.SHODAN_PAGE_LIMIT ?? '10', 10);
 const TARGET_LIMIT = Number.parseInt(process.env.SHODAN_TARGET_LIMIT ?? '100', 10);
 
-const HOST_BASE    = 'https://api.shodan.io/shodan/host/';
+const SEARCH_BASE = 'https://api.shodan.io/shodan/host/search';
 
 // Simple in-memory 30-day cache (clears per process)
 const cache = new Map<string, { ts: number; data: any }>();
@@ -298,7 +298,7 @@ export async function runShodanScan(job: {
     let fetched = 0;
     for (let page = 1; page <= PAGE_LIMIT; page += 1) {
       const q = encodeURIComponent(`hostname:${tgt}`);
-      const url = `${HOST_BASE}${tgt}?key=${API_KEY}`;
+      const url = `${SEARCH_BASE}?key=${API_KEY}&query=${q}&page=${page}`;
 
       try {
         // eslint-disable-next-line no-await-in-loop

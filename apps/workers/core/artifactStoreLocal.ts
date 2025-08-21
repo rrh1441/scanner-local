@@ -76,25 +76,39 @@ export async function insertArtifact(
 
 async function insertArtifactInternal(artifact: ArtifactInput): Promise<number> {
   try {
+    const scan_id = artifact.meta?.scan_id;
     console.log('[LocalStore] Inserting artifact:', {
       type: artifact.type,
       severity: artifact.severity,
-      scan_id: artifact.meta?.scan_id || 'unknown'
+      scan_id: scan_id || 'MISSING',
+      val_text_length: artifact.val_text?.length || 0
     });
+    
+    // Ensure we have a valid scan_id
+    if (!scan_id || scan_id === 'unknown') {
+      console.error('[LocalStore] ERROR: Artifact missing scan_id!', artifact.meta);
+      return -1;
+    }
     
     const artifactData = {
       id: `artifact_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      scan_id: artifact.meta?.scan_id || 'unknown',
+      scan_id: scan_id,
       type: artifact.type,
       file_path: `${artifact.type}_${Date.now()}.txt`,
       size_bytes: Buffer.byteLength(artifact.val_text || '', 'utf8'),
+      severity: artifact.severity,
+      val_text: artifact.val_text,
+      src_url: artifact.src_url,
+      sha256: artifact.sha256,
+      mime_type: artifact.mime,
+      metadata: artifact.meta,
       created_at: new Date()
     };
     
     await getStore().insertArtifact(artifactData);
-    console.log(`[LocalStore] Successfully inserted artifact: ${artifact.type}`);
+    console.log(`[LocalStore] ✅ Successfully inserted artifact: ${artifactData.type} for scan ${artifactData.scan_id}`);
     
-    // Return a fake numeric ID for compatibility
+    // Return a fake numeric ID for compatibility  
     return Date.now();
   } catch (error: any) {
     console.error('[LocalStore] Failed to insert artifact:', {
@@ -129,13 +143,25 @@ export async function insertFinding(
 ): Promise<number> {
   // Handle legacy 4 or 5 parameter calls
   if (typeof findingOrArtifactId === 'number' && findingType) {
+    // Look up scan_id from the artifact
+    let scanId = 'unknown';
+    try {
+      const store = getStore();
+      const result = await store.query('SELECT scan_id FROM artifacts WHERE id = $1', [findingOrArtifactId]);
+      if (result.rows.length > 0) {
+        scanId = result.rows[0].scan_id;
+      }
+    } catch (error) {
+      console.error('[LocalStore] Error looking up scan_id for artifact:', error);
+    }
+    
     const finding = {
       artifact_id: findingOrArtifactId,
       finding_type: findingType,
       recommendation: recommendation || '',
       description: description || '',
       repro_command: reproCommand || null,
-      scan_id: 'unknown', // Will be filled in if possible
+      scan_id: scanId,
       severity: 'MEDIUM',
       type: findingType
     };
@@ -149,24 +175,36 @@ export async function insertFinding(
 async function insertFindingInternal(finding: any): Promise<number> {
   try {
     console.log('[LocalStore] Inserting finding:', {
-      type: finding.type,
+      type: finding.type || finding.finding_type,
       severity: finding.severity,
-      scan_id: finding.scan_id
+      scan_id: finding.scan_id,
+      title: finding.title || finding.recommendation
     });
+    
+    // Ensure we have a valid scan_id
+    if (!finding.scan_id || finding.scan_id === 'unknown') {
+      console.error('[LocalStore] ERROR: Finding missing scan_id!', finding);
+      return -1;
+    }
     
     const findingData = {
       id: `finding_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      scan_id: finding.scan_id || 'unknown',
+      scan_id: finding.scan_id,
       type: finding.type || finding.finding_type,
       severity: finding.severity || 'MEDIUM',
-      title: finding.title || finding.recommendation || '',
-      description: finding.description || '',
-      data: finding.data,
+      title: finding.title || finding.recommendation || finding.description?.substring(0, 100) || 'Security Finding',
+      description: finding.description || finding.recommendation || '',
+      data: {
+        ...finding.data,
+        artifact_id: finding.artifact_id,
+        repro_command: finding.repro_command,
+        meta: finding.meta
+      },
       created_at: new Date()
     };
     
     await getStore().insertFinding(findingData);
-    console.log(`[LocalStore] Successfully inserted finding: ${finding.type}`);
+    console.log(`[LocalStore] ✅ Successfully inserted finding: ${findingData.type} (${findingData.severity}) for scan ${findingData.scan_id}`);
     
     // Return a fake numeric ID for compatibility
     return Date.now();

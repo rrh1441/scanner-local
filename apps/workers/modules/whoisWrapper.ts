@@ -52,8 +52,8 @@ export async function resolveWhoisBatch(domains: string[]): Promise<{ records: W
     await writeFile(tempFile, JSON.stringify(domains));
     
     // Call Python resolver with domains as arguments
-    // Use __dirname to get the correct path relative to this module
-    const pythonScript = join(new URL('.', import.meta.url).pathname, 'whoisResolver.py');
+    // Point to source file since Python files aren't copied to dist
+    const pythonScript = join(process.cwd(), 'modules', 'whoisResolver.py');
     const { stdout, stderr } = await exec('python3', [pythonScript, ...domains], { 
         timeout: 60_000,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer to prevent hanging

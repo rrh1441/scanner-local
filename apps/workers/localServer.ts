@@ -1,3 +1,6 @@
+import { config } from 'dotenv';
+config(); // Load .env file
+
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -78,6 +81,8 @@ app.get('/health', (req, res) => {
 app.post('/scan', async (req, res) => {
   const { domain, scan_id = `scan-${nanoid()}`, companyName } = req.body;
   
+  console.log(`🚨 SCAN ENDPOINT HIT - NEW LOGIC ACTIVE - scan_id: ${scan_id}`);
+  
   if (!domain) {
     return res.status(400).json({ error: 'domain is required' });
   }
@@ -104,20 +109,30 @@ app.post('/scan', async (req, res) => {
     });
 
     // Execute scan (same logic as GCP version)
+    console.log(`[Scan] About to call executeScan for ${scan_id}`);
     const result = await executeScan({ scan_id, domain: domain.toLowerCase(), companyName });
+    console.log(`[Scan] executeScan completed for ${scan_id}`);
     
     const duration = Date.now() - startTime;
     
-    // Count findings from the result
-    let totalFindings = 0;
+    // Count findings and artifacts from database (accurate counts)
+    console.log(`[Scan] 🔍 Starting count for scan_id: ${scan_id}`);
+    const actualFindings = await store.getFindingsByScanId(scan_id);
+    const totalFindings = actualFindings.length;
+    console.log(`[Scan] 📊 Database query returned ${totalFindings} findings`);
     let totalArtifacts = 0;
     const moduleStatus: Record<string, any> = {};
     
+    // Count artifacts from database  
+    try {
+      totalArtifacts = await store.getArtifactCount(scan_id);
+      console.log(`[Scan] 📦 Database query returned ${totalArtifacts} artifacts`);
+    } catch (error) {
+      console.error('[Scan] ❌ Failed to count artifacts:', error);
+    }
+    
     for (const [moduleName, moduleResult] of Object.entries(result.results)) {
       const res = moduleResult as any;
-      if (res.findings_count) totalFindings += res.findings_count;
-      if (res.artifacts_count) totalArtifacts += res.artifacts_count;
-      
       moduleStatus[moduleName] = {
         status: res.status || 'completed',
         findings: res.findings_count || 0,
@@ -125,6 +140,8 @@ app.post('/scan', async (req, res) => {
         duration_ms: res.duration_ms || 0
       };
     }
+    
+    console.log(`[Scan] ✅ FINAL COUNTS for ${scan_id}: ${totalFindings} findings, ${totalArtifacts} artifacts`);
 
     // Update scan record with completion data
     await store.insertScan({
@@ -329,6 +346,19 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`🔍 Start scan: POST http://localhost:${port}/scan`);
   console.log(`📋 List scans: GET http://localhost:${port}/scans`);
   console.log(`📄 Reports: http://localhost:${port}/reports/{scan_id}/report.pdf`);
+});
+
+// Add error handlers for debugging
+process.on('uncaughtException', (error) => {
+  console.error('💥 UNCAUGHT EXCEPTION:', error);
+  console.error('Stack:', error.stack);
+  store.close();
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 UNHANDLED REJECTION at:', promise, 'reason:', reason);
+  console.error('Stack:', reason instanceof Error ? reason.stack : 'No stack trace');
 });
 
 // Graceful shutdown
