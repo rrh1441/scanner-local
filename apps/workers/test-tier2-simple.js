@@ -9,7 +9,7 @@ import { LocalStore } from './dist/core/localStore.js';
 import { runRateLimitScan } from './dist/modules/rateLimitScan.js';
 
 const TEST_SCAN_ID = `TIER2_SIMPLE_${Date.now()}`;
-const TEST_DOMAIN = 'testphp.vulnweb.com';
+const TEST_DOMAIN = 'httpbin.org';
 
 // Helper function to get findings count
 async function getFindingsCount(store, scanId) {
@@ -37,7 +37,7 @@ async function seedRateLimitTestData(store) {
         metadata: {
             endpoints: [
                 {
-                    url: 'https://testphp.vulnweb.com/login',
+                    url: 'https://httpbin.org/post',
                     path: '/login',
                     method: 'POST',
                     status: 200,
@@ -45,7 +45,7 @@ async function seedRateLimitTestData(store) {
                     category: 'auth'
                 },
                 {
-                    url: 'https://testphp.vulnweb.com/api/users',
+                    url: 'https://httpbin.org/get',
                     path: '/api/users',
                     method: 'GET',
                     status: 200,
@@ -53,7 +53,7 @@ async function seedRateLimitTestData(store) {
                     category: 'api'
                 },
                 {
-                    url: 'https://testphp.vulnweb.com/search',
+                    url: 'https://httpbin.org/status/200',
                     path: '/search',
                     method: 'GET',
                     status: 200,

@@ -8,6 +8,9 @@ import { LocalStore } from './localStore.js';
 // Global store instance
 let store: LocalStore | null = null;
 
+// In-memory mapping for numeric ID to string artifact ID compatibility
+const artifactIdMap: Map<number, string> = new Map();
+
 function getStore(): LocalStore {
   if (!store) {
     store = new LocalStore();
@@ -108,8 +111,10 @@ async function insertArtifactInternal(artifact: ArtifactInput): Promise<number> 
     await getStore().insertArtifact(artifactData);
     console.log(`[LocalStore] ✅ Successfully inserted artifact: ${artifactData.type} for scan ${artifactData.scan_id}`);
     
-    // Return a fake numeric ID for compatibility  
-    return Date.now();
+    // Store mapping for lookup compatibility and return numeric ID
+    const numericId = Date.now() + Math.floor(Math.random() * 1000);
+    artifactIdMap.set(numericId, artifactData.id);
+    return numericId;
   } catch (error: any) {
     console.error('[LocalStore] Failed to insert artifact:', {
       error: error.message,
@@ -143,13 +148,24 @@ export async function insertFinding(
 ): Promise<number> {
   // Handle legacy 4 or 5 parameter calls
   if (typeof findingOrArtifactId === 'number' && findingType) {
-    // Look up scan_id from the artifact
+    // Look up scan_id from the artifact using the mapping
     let scanId = 'unknown';
     try {
       const store = getStore();
-      const result = await store.query('SELECT scan_id FROM artifacts WHERE id = $1', [findingOrArtifactId]);
-      if (result.rows.length > 0) {
-        scanId = result.rows[0].scan_id;
+      
+      // First try the in-memory mapping for recent artifacts
+      const actualArtifactId = artifactIdMap.get(findingOrArtifactId);
+      if (actualArtifactId) {
+        const result = await store.query('SELECT scan_id FROM artifacts WHERE id = $1', [actualArtifactId]);
+        if (result.rows.length > 0) {
+          scanId = result.rows[0].scan_id;
+        }
+      } else {
+        // Fallback: try direct lookup (shouldn't work but just in case)
+        const result = await store.query('SELECT scan_id FROM artifacts WHERE id = $1', [findingOrArtifactId]);
+        if (result.rows.length > 0) {
+          scanId = result.rows[0].scan_id;
+        }
       }
     } catch (error) {
       console.error('[LocalStore] Error looking up scan_id for artifact:', error);
