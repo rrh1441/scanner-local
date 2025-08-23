@@ -15,6 +15,7 @@ dist/
 .env.local
 .env*.local
 .env.docker
+.env.new
 
 # Logs
 *.log
@@ -43,6 +44,10 @@ artifacts/
 .tmp/
 .cache/
 temp/
+
+# Generated scan reports
+apps/workers/scan-reports/
+scan-reports/
 
 # Deployment
 .wrangler/
