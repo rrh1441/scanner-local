@@ -27,6 +27,23 @@ app.use('/artifacts', express.static('./scan-artifacts'));
 // Handlebars helpers
 handlebars.registerHelper('toLowerCase', (str: string) => str.toLowerCase());
 handlebars.registerHelper('eq', (a: any, b: any) => a === b);
+handlebars.registerHelper('format_currency', (amount: number) => {
+  if (!amount || isNaN(amount)) return '0';
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  }).format(amount);
+});
+handlebars.registerHelper('format_abbrev', (value: any) => {
+  const n = Number(value) || 0;
+  const abs = Math.abs(n);
+  const fmt = (v: number, suffix: string) => `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)}${suffix}`;
+  if (abs >= 1e12) return fmt(n / 1e12, 'T');
+  if (abs >= 1e9)  return fmt(n / 1e9,  'B');
+  if (abs >= 1e6)  return fmt(n / 1e6,  'M');
+  if (abs >= 1e3)  return fmt(n / 1e3,  'k');
+  return n.toLocaleString();
+});
 
 // Report generation functions
 async function loadTemplate(): Promise<handlebars.TemplateDelegate> {
@@ -272,6 +289,13 @@ app.post('/reports/generate', async (req, res) => {
       }
     });
     
+    // Fetch EAL summary
+    const ealSummaryResult = await store.query(
+      'SELECT * FROM scan_eal_summary WHERE scan_id = $1',
+      [scan_id]
+    );
+    const ealSummary = ealSummaryResult.rows[0] || null;
+    
     const templateData = {
       scan_id,
       domain: scanData.domain || 'unknown',
@@ -282,7 +306,8 @@ app.post('/reports/generate', async (req, res) => {
       total_findings: findings.length,
       findings: findings.slice(0, 50), // Limit to 50 findings for PDF size
       severity_counts: severityCounts,
-      has_critical_findings: severityCounts.CRITICAL > 0
+      has_critical_findings: severityCounts.CRITICAL > 0,
+      eal_summary: ealSummary
     };
     
     // Generate HTML from template
@@ -324,6 +349,156 @@ app.post('/reports/generate', async (req, res) => {
     });
   }
 });
+
+// Direct report access routes
+app.get('/reports/:scanId/report.pdf', async (req, res) => {
+  try {
+    const { scanId } = req.params;
+    
+    // Check if scan exists
+    const scan = await store.getScan(scanId);
+    if (!scan) {
+      return res.status(404).json({ error: 'Scan not found' });
+    }
+    
+    // Try to get existing report
+    const reportPath = `./scan-reports/${scanId}/report.pdf`;
+    
+    // Use sendFile with callback to handle file not found
+    res.sendFile(reportPath, { root: process.cwd() }, async (err) => {
+      if (err) {
+        console.log(`[Report] PDF not found, generating for scan: ${scanId}`);
+        
+        // Generate report
+        const generateResult = await generateReportForScan(scanId);
+        if (generateResult.success) {
+          // Try to send the generated file
+          res.sendFile(reportPath, { root: process.cwd() }, (secondErr) => {
+            if (secondErr) {
+              console.error('[Report] Failed to serve generated PDF:', secondErr);
+              res.status(500).json({ error: 'Failed to serve generated report' });
+            }
+          });
+        } else {
+          res.status(500).json({ error: 'Failed to generate report', message: generateResult.error });
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error('[Report] Error serving PDF:', error);
+    res.status(500).json({ error: 'Failed to serve report', message: error.message });
+  }
+});
+
+app.get('/reports/:scanId/report.html', async (req, res) => {
+  try {
+    const { scanId } = req.params;
+    
+    // Check if scan exists
+    const scan = await store.getScan(scanId);
+    if (!scan) {
+      return res.status(404).json({ error: 'Scan not found' });
+    }
+    
+    // Try to get existing report
+    const reportPath = `./scan-reports/${scanId}/report.html`;
+    
+    // Use sendFile with callback to handle file not found
+    res.sendFile(reportPath, { root: process.cwd() }, async (err) => {
+      if (err) {
+        console.log(`[Report] HTML not found, generating for scan: ${scanId}`);
+        
+        // Generate report
+        const generateResult = await generateReportForScan(scanId);
+        if (generateResult.success) {
+          // Try to send the generated file
+          res.sendFile(reportPath, { root: process.cwd() }, (secondErr) => {
+            if (secondErr) {
+              console.error('[Report] Failed to serve generated HTML:', secondErr);
+              res.status(500).json({ error: 'Failed to serve generated report' });
+            }
+          });
+        } else {
+          res.status(500).json({ error: 'Failed to generate report', message: generateResult.error });
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error('[Report] Error serving HTML:', error);
+    res.status(500).json({ error: 'Failed to serve report', message: error.message });
+  }
+});
+
+// Helper function to generate report for a scan
+async function generateReportForScan(scan_id: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    console.log(`[Report] Generating report for scan: ${scan_id}`);
+    
+    // Fetch scan data
+    const scanData = await store.getScan(scan_id);
+    if (!scanData) {
+      return { success: false, error: 'Scan not found' };
+    }
+    
+    // Fetch findings
+    const findings = await store.getFindingsByScanId(scan_id);
+    
+    // Process data for template
+    const severityCounts = {
+      CRITICAL: 0,
+      HIGH: 0,
+      MEDIUM: 0,
+      LOW: 0,
+      INFO: 0
+    };
+    
+    findings.forEach((finding: any) => {
+      const severity = finding.severity || 'INFO';
+      if (severity in severityCounts) {
+        severityCounts[severity as keyof typeof severityCounts]++;
+      }
+    });
+    
+    // Fetch EAL summary
+    const ealSummaryResult = await store.query(
+      'SELECT * FROM scan_eal_summary WHERE scan_id = $1',
+      [scan_id]
+    );
+    const ealSummary = ealSummaryResult.rows[0] || null;
+    
+    const templateData = {
+      scan_id,
+      domain: scanData.domain || 'unknown',
+      scan_date: scanData.created_at.toLocaleDateString(),
+      report_date: new Date().toLocaleDateString(),
+      duration_seconds: Math.round((scanData.duration_ms || 0) / 1000),
+      modules_completed: scanData.metadata?.modules_completed || 0,
+      total_findings: findings.length,
+      findings: findings.slice(0, 50), // Limit to 50 findings for PDF size
+      severity_counts: severityCounts,
+      has_critical_findings: severityCounts.CRITICAL > 0,
+      eal_summary: ealSummary
+    };
+    
+    // Generate HTML from template
+    const template = await loadTemplate();
+    const html = template(templateData);
+    
+    // Generate PDF
+    const pdfBuffer = await generatePDF(html);
+    
+    // Save reports locally
+    await store.saveReport(scan_id, Buffer.from(pdfBuffer), 'pdf');
+    await store.saveReport(scan_id, Buffer.from(html), 'html');
+    
+    console.log(`[Report] Report generated successfully for scan: ${scan_id}`);
+    return { success: true };
+    
+  } catch (error: any) {
+    console.error('[Report] Report generation failed:', error);
+    return { success: false, error: error.message };
+  }
+}
 
 // Debug endpoint for testing (same as GCP version but simpler)
 app.post('/debug/test-endpoints', async (req, res) => {

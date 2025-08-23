@@ -179,6 +179,7 @@
       color: var(--ink-3);
       font-size: 0.9rem;
     }
+
     .overview {
       margin-top: var(--space-6);
       background: var(--card);
@@ -224,6 +225,7 @@
     .sev-medium .count { color: var(--medium); }
     .sev-low .count { color: var(--low); }
     .sev-info .count { color: var(--info); }
+
     .breakdown {
       margin-top: var(--space-6);
       display: grid;
@@ -263,6 +265,7 @@
       color: var(--ink-3);
       font-size: 0.85rem;
     }
+
     .findings {
       margin-top: var(--space-6);
     }
@@ -324,6 +327,7 @@
     .recommend strong {
       color: var(--accent-2);
     }
+
     .method {
       margin-top: var(--space-6);
       background: var(--card);
@@ -532,3 +536,17 @@
   </main>
 </body>
 </html>
+
+
+If you need a Handlebars helper for format_abbrev, here’s a safe version:
+// Node/Express Handlebars helper
+hbs.handlebars.registerHelper('format_abbrev', function (value) {
+  const n = Number(value) || 0;
+  const abs = Math.abs(n);
+  const fmt = (v, suffix) => `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)}${suffix}`;
+  if (abs >= 1e12) return fmt(n / 1e12, 'T');
+  if (abs >= 1e9)  return fmt(n / 1e9,  'B');
+  if (abs >= 1e6)  return fmt(n / 1e6,  'M');
+  if (abs >= 1e3)  return fmt(n / 1e3,  'k');
+  return n.toLocaleString();
+});

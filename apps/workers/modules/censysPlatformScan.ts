@@ -13,17 +13,17 @@ import { insertArtifact, insertFinding } from '../core/artifactStore.js';
 
 // Don't throw error on import - handle gracefully in scan function
 
-const CENSYS_PAT     = process.env.CENSYS_PAT as string;
+const CENSYS_PAT     = (process.env.CENSYS_PAT || process.env.CENSYS_TOKEN) as string;
 const CENSYS_ORG_ID  = process.env.CENSYS_ORG_ID as string;
 const DATA_DIR       = process.env.DATA_DIR ?? './data';
 const MAX_HOSTS      = Number.parseInt(process.env.CENSYS_MAX_HOSTS ?? '10000', 10);
-const BATCH_SIZE     = Number.parseInt(process.env.CENSYS_BATCH_SIZE ?? '25', 10);
+const BATCH_SIZE     = Number.parseInt(process.env.CENSYS_BATCH_SIZE ?? '5', 10);
 
 const BASE   = 'https://api.platform.censys.io/v3/global';
 const SEARCH = `${BASE}/search/query`;
 const HOST   = `${BASE}/asset/host`;
 
-const MAX_QPS = 3;
+const MAX_QPS = 1;
 const TIMEOUT = 30_000;
 const RETRIES = 4;
 
@@ -94,7 +94,7 @@ async function censysFetch<T>(
         Authorization: `Bearer ${CENSYS_PAT}`,
         'X-Organization-ID': CENSYS_ORG_ID,
         'Content-Type': 'application/json',
-        Accept: 'application/json',
+        Accept: 'application/vnd.censys.api.v3.host.v1+json',
         ...(init.headers ?? {}),
       },
       body,
@@ -173,7 +173,8 @@ export async function runCensysPlatformScan({
         continue;
       }
       const host = res.value.result;
-      for (const svc of host.services) {
+      const services = host.services || [];
+      for (const svc of services) {
         const cvss = svc.vulnerabilities?.[0]?.cvss?.score;
         const risk = riskFrom(svc.service_name, cvss);
 
@@ -223,31 +224,35 @@ export async function runCensysPlatformScan({
 
   /* ---- 1. enumerate assets ---- */
   interface SearchResp {
-    result: { assets: { asset_id: string }[]; links?: { next?: string } };
+    result: { hits: any[]; next_page_token?: string };
   }
 
   let cursor: string | undefined;
   const batch: string[] = [];
 
   do {
-    const body = {
-      q: `services.tls.certificates.leaf_data.names: ${domain}`,
-      per_page: 100,
-      cursor,
+    const body: any = {
+      query: domain
     };
     // eslint-disable-next-line no-await-in-loop
     const data = await censysFetch<SearchResp>(SEARCH, { method: 'POST', jsonBody: body });
 
-    for (const a of data.result.assets) {
-      const ip = a.asset_id.replace(/^ip:/, '');
-      if (hashes.size >= MAX_HOSTS) { cursor = undefined; break; }
-      batch.push(ip);
-      if (batch.length >= BATCH_SIZE) {
-        // eslint-disable-next-line no-await-in-loop
-        await processBatch(batch.splice(0));
+    for (const hit of data.result.hits) {
+      // Extract IP from the hit - only use actual IP addresses, not hostnames
+      const resource = hit.webproperty_v1?.resource || hit.host_v1?.resource;
+      if (resource && resource.ip) {
+        // Only add actual IP addresses, skip hostnames
+        const ip = resource.ip;
+        if (ip && ip.match(/^\d+\.\d+\.\d+\.\d+$/) && hashes.size < MAX_HOSTS) {
+          batch.push(ip);
+          if (batch.length >= BATCH_SIZE) {
+            // eslint-disable-next-line no-await-in-loop
+            await processBatch(batch.splice(0));
+          }
+        }
       }
     }
-    cursor = data.result.links?.next;
+    cursor = data.result.next_page_token;
   } while (cursor);
 
   await processBatch(batch);
@@ -291,7 +296,7 @@ export async function runCensysScan(job: { domain: string; scanId: string }): Pr
   const { domain, scanId } = job;
   
   // Check if Censys credentials are available
-  if (!process.env.CENSYS_PAT || !process.env.CENSYS_ORG_ID) {
+  if (!(process.env.CENSYS_PAT || process.env.CENSYS_TOKEN) || !process.env.CENSYS_ORG_ID) {
     const log = logWrap();
     log(`[${scanId}] Censys scan skipped - CENSYS_PAT and CENSYS_ORG_ID not configured (saves ~$2-10 per scan)`);
     return 0;
