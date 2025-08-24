@@ -549,4 +549,4 @@ hbs.handlebars.registerHelper('format_abbrev', function (value) {
   if (abs >= 1e6)  return fmt(n / 1e6,  'M');
   if (abs >= 1e3)  return fmt(n / 1e3,  'k');
   return n.toLocaleString();
-});
+}); 

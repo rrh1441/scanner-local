@@ -6,6 +6,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { executeScan, ScanJob } from './scan/executeScan.js';
 import { LocalStore } from './core/localStore.js';
+import { ScanQueue } from './core/scanQueue.js';
 import handlebars from 'handlebars';
 import puppeteer from 'puppeteer';
 import { readFile } from 'node:fs/promises';
@@ -14,6 +15,27 @@ import { nanoid } from 'nanoid';
 
 const app = express();
 const store = new LocalStore();
+
+// Initialize scan queue with configurable concurrency (default: 3 concurrent scans)
+const MAX_CONCURRENT_SCANS = parseInt(process.env.MAX_CONCURRENT_SCANS || '3');
+const scanQueue = new ScanQueue(MAX_CONCURRENT_SCANS);
+
+// Set up queue event listeners for logging
+scanQueue.on('job-queued', (jobStatus) => {
+  console.log(`[Queue] Job ${jobStatus.scan_id} queued (position: ${jobStatus.position_in_queue})`);
+});
+
+scanQueue.on('job-started', (jobStatus) => {
+  console.log(`[Queue] Job ${jobStatus.scan_id} started on ${jobStatus.worker_id}`);
+});
+
+scanQueue.on('job-completed', (jobStatus) => {
+  console.log(`[Queue] Job ${jobStatus.scan_id} completed successfully`);
+});
+
+scanQueue.on('job-failed', (jobStatus) => {
+  console.log(`[Queue] Job ${jobStatus.scan_id} failed: ${jobStatus.error_message}`);
+});
 
 // Middleware
 app.use(helmet());
@@ -86,19 +108,27 @@ async function generatePDF(html: string): Promise<Uint8Array> {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const queueMetrics = scanQueue.getMetrics();
+  
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '1.0.0-local'
+    version: '1.0.0-local-queue',
+    queue: {
+      max_concurrent_scans: MAX_CONCURRENT_SCANS,
+      queued_jobs: queueMetrics.queued_jobs,
+      running_jobs: queueMetrics.running_jobs,
+      active_workers: queueMetrics.active_workers,
+      total_workers: queueMetrics.total_workers,
+      avg_scan_time_ms: queueMetrics.average_scan_time_ms
+    }
   });
 });
 
-// Scan endpoint
+// Queue-based scan endpoint
 app.post('/scan', async (req, res) => {
-  const { domain, scan_id = `scan-${nanoid()}`, companyName } = req.body;
-  
-  console.log(`🚨 SCAN ENDPOINT HIT - NEW LOGIC ACTIVE - scan_id: ${scan_id}`);
+  const { domain, companyName, priority } = req.body;
   
   if (!domain) {
     return res.status(400).json({ error: 'domain is required' });
@@ -110,121 +140,145 @@ app.post('/scan', async (req, res) => {
     return res.status(400).json({ error: 'Invalid domain format' });
   }
 
-  const startTime = Date.now();
-  
-  console.log(`[Scan] Starting scan for domain: ${domain}, scan_id: ${scan_id}`);
-  
+  // Validate priority if provided
+  if (priority && !['low', 'normal', 'high'].includes(priority)) {
+    return res.status(400).json({ error: 'Invalid priority. Must be one of: low, normal, high' });
+  }
+
   try {
-    // Store initial scan record
-    await store.insertScan({
-      id: scan_id,
+    // Enqueue the scan job
+    const scan_id = await scanQueue.enqueue({
       domain: domain.toLowerCase(),
-      status: 'running',
-      created_at: new Date(),
-      findings_count: 0,
-      artifacts_count: 0
+      companyName,
+      priority: priority || 'normal'
     });
 
-    // Execute scan (same logic as GCP version)
-    console.log(`[Scan] About to call executeScan for ${scan_id}`);
-    const result = await executeScan({ scan_id, domain: domain.toLowerCase(), companyName });
-    console.log(`[Scan] executeScan completed for ${scan_id}`);
+    // Get initial queue status
+    const jobStatus = scanQueue.getJobStatus(scan_id);
     
-    const duration = Date.now() - startTime;
-    
-    // Count findings and artifacts from database (accurate counts)
-    console.log(`[Scan] 🔍 Starting count for scan_id: ${scan_id}`);
-    const actualFindings = await store.getFindingsByScanId(scan_id);
-    const totalFindings = actualFindings.length;
-    console.log(`[Scan] 📊 Database query returned ${totalFindings} findings`);
-    let totalArtifacts = 0;
-    const moduleStatus: Record<string, any> = {};
-    
-    // Count artifacts from database  
-    try {
-      totalArtifacts = await store.getArtifactCount(scan_id);
-      console.log(`[Scan] 📦 Database query returned ${totalArtifacts} artifacts`);
-    } catch (error) {
-      console.error('[Scan] ❌ Failed to count artifacts:', error);
-    }
-    
-    for (const [moduleName, moduleResult] of Object.entries(result.results)) {
-      const res = moduleResult as any;
-      moduleStatus[moduleName] = {
-        status: res.status || 'completed',
-        findings: res.findings_count || 0,
-        artifacts: res.artifacts_count || 0,
-        duration_ms: res.duration_ms || 0
-      };
-    }
-    
-    console.log(`[Scan] ✅ FINAL COUNTS for ${scan_id}: ${totalFindings} findings, ${totalArtifacts} artifacts`);
-
-    // Update scan record with completion data
-    await store.insertScan({
-      id: scan_id,
-      domain: domain.toLowerCase(),
-      status: 'completed',
-      created_at: new Date(startTime),
-      completed_at: new Date(),
-      findings_count: totalFindings,
-      artifacts_count: totalArtifacts,
-      duration_ms: duration,
-      metadata: {
-        ...result.metadata,
-        module_status: moduleStatus
-      }
-    });
-    
-    console.log(`[Scan] Completed scan ${scan_id} in ${duration}ms with ${totalFindings} findings`);
+    console.log(`[Scan] Enqueued scan ${scan_id} for domain: ${domain}`);
     
     res.json({ 
-      scan_id, 
-      status: 'completed',
+      scan_id,
+      status: jobStatus?.status || 'queued',
       domain: domain.toLowerCase(),
-      duration_ms: duration,
-      findings_count: totalFindings,
-      artifacts_count: totalArtifacts,
-      modules_completed: Object.keys(result.results).length,
-      report_url: `/reports/${scan_id}/report.pdf`,
-      results_summary: moduleStatus
+      position_in_queue: jobStatus?.position_in_queue || 0,
+      message: 'Scan queued successfully. Use GET /scan/{scan_id}/status to monitor progress.',
+      status_url: `/scan/${scan_id}/status`,
+      report_url: `/reports/${scan_id}/report.pdf`
     });
   } catch (error: any) {
-    const duration = Date.now() - startTime;
-    
-    console.error(`[Scan] Failed scan ${scan_id}:`, error.message);
-    
-    // Store failed scan record
-    await store.insertScan({
-      id: scan_id,
-      domain: domain.toLowerCase(),
-      status: 'failed',
-      created_at: new Date(startTime),
-      completed_at: new Date(),
-      findings_count: 0,
-      artifacts_count: 0,
-      duration_ms: duration,
-      metadata: {
-        error_message: error.message,
-        error_stack: error.stack
-      }
-    });
+    console.error(`[Scan] Failed to enqueue scan:`, error.message);
     
     res.status(500).json({ 
-      error: 'Scan failed', 
-      message: error.message,
-      scan_id,
-      duration_ms: duration
+      error: 'Failed to queue scan', 
+      message: error.message
     });
   }
 });
 
-// List scans endpoint
+// Get scan status endpoint
+app.get('/scan/:scanId/status', async (req, res) => {
+  try {
+    const { scanId } = req.params;
+    const jobStatus = scanQueue.getJobStatus(scanId);
+    
+    if (!jobStatus) {
+      // Try to get from database for completed scans not in queue
+      const scan = await store.getScan(scanId);
+      if (!scan) {
+        return res.status(404).json({ error: 'Scan not found' });
+      }
+      
+      return res.json({
+        scan_id: scanId,
+        status: scan.status,
+        domain: scan.domain,
+        created_at: scan.created_at,
+        completed_at: scan.completed_at,
+        findings_count: scan.findings_count,
+        artifacts_count: scan.artifacts_count,
+        duration_ms: scan.duration_ms
+      });
+    }
+    
+    res.json(jobStatus);
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to get scan status', message: error.message });
+  }
+});
+
+// Cancel scan endpoint
+app.delete('/scan/:scanId', async (req, res) => {
+  try {
+    const { scanId } = req.params;
+    const cancelled = await scanQueue.cancelJob(scanId);
+    
+    if (cancelled) {
+      res.json({ 
+        scan_id: scanId, 
+        status: 'cancelled',
+        message: 'Scan cancelled successfully'
+      });
+    } else {
+      res.status(404).json({ 
+        error: 'Scan not found or cannot be cancelled',
+        scan_id: scanId
+      });
+    }
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to cancel scan', message: error.message });
+  }
+});
+
+// Queue metrics endpoint
+app.get('/queue/metrics', (req, res) => {
+  try {
+    const metrics = scanQueue.getMetrics();
+    res.json({
+      ...metrics,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to get queue metrics', message: error.message });
+  }
+});
+
+// Queue status endpoint
+app.get('/queue/status', (req, res) => {
+  try {
+    const queuedJobs = scanQueue.getQueuedJobs();
+    const runningJobs = scanQueue.getRunningJobs();
+    
+    res.json({
+      queued: queuedJobs,
+      running: runningJobs,
+      metrics: scanQueue.getMetrics(),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to get queue status', message: error.message });
+  }
+});
+
+// List scans endpoint (enhanced)
 app.get('/scans', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit as string) || 50;
     const scans = await store.getRecentScans(limit);
-    res.json(scans);
+    
+    // Add current queue status for context
+    const queueMetrics = scanQueue.getMetrics();
+    
+    res.json({
+      scans,
+      queue_info: {
+        queued_jobs: queueMetrics.queued_jobs,
+        running_jobs: queueMetrics.running_jobs,
+        active_workers: queueMetrics.active_workers
+      },
+      timestamp: new Date().toISOString()
+    });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to fetch scans', message: error.message });
   }
@@ -516,18 +570,20 @@ app.post('/debug/test-endpoints', async (req, res) => {
 // Start server
 const port = Number(process.env.PORT ?? 8080);
 app.listen(port, '0.0.0.0', () => {
-  console.log(`🚀 Local Scanner Server running on http://localhost:${port}`);
+  console.log(`🚀 Local Scanner Server with Queue running on http://localhost:${port}`);
   console.log(`📊 Health check: http://localhost:${port}/health`);
   console.log(`🔍 Start scan: POST http://localhost:${port}/scan`);
+  console.log(`📈 Queue status: GET http://localhost:${port}/queue/status`);
   console.log(`📋 List scans: GET http://localhost:${port}/scans`);
   console.log(`📄 Reports: http://localhost:${port}/reports/{scan_id}/report.pdf`);
+  console.log(`⚙️  Max concurrent scans: ${MAX_CONCURRENT_SCANS}`);
 });
 
 // Add error handlers for debugging
-process.on('uncaughtException', (error) => {
+process.on('uncaughtException', async (error) => {
   console.error('💥 UNCAUGHT EXCEPTION:', error);
   console.error('Stack:', error.stack);
-  store.close();
+  await gracefulShutdown();
   process.exit(1);
 });
 
@@ -536,15 +592,31 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Stack:', reason instanceof Error ? reason.stack : 'No stack trace');
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
+// Graceful shutdown function
+async function gracefulShutdown() {
   console.log('\n🛑 Shutting down gracefully...');
+  
+  try {
+    // Shutdown queue first (waits for running scans to complete)
+    await scanQueue.shutdown();
+    console.log('✅ Queue shutdown complete');
+  } catch (error) {
+    console.error('❌ Queue shutdown error:', error);
+  }
+  
+  // Close database connections
   store.close();
+  console.log('✅ Database connections closed');
+}
+
+// Graceful shutdown handlers
+process.on('SIGINT', async () => {
+  await gracefulShutdown();
   process.exit(0);
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('\n🛑 Received SIGTERM, shutting down...');
-  store.close();
+  await gracefulShutdown();
   process.exit(0);
 });
